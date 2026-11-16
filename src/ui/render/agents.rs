@@ -14,7 +14,7 @@ fn state_color(state: State) -> Color {
 fn selected_run<'a>(ui: &'a Ui, store: &Store) -> Option<&'a Run> {
     ui.visible_runs(store).get(ui.run_row).copied()
 }
-fn lines_for(run: &Run, output: bool, _width: u16) -> Vec<Line<'static>> {
+fn lines_for(run: &Run, output: bool, width: u16) -> Vec<Line<'static>> {
     if output {
         let mut lines = vec![
             Line::styled(
@@ -36,11 +36,7 @@ fn lines_for(run: &Run, output: bool, _width: u16) -> Vec<Line<'static>> {
                 MUTED,
             )))
         }
-        lines.extend(
-            clean(&run.result)
-                .lines()
-                .map(|line| Line::raw(line.to_owned())),
-        );
+        lines.extend(markdown::render(&run.result, width));
         if run.result_truncated {
             lines.push(Line::from(label(
                 "Result preview capped; inspect the saved transcript.",

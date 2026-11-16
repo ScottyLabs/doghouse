@@ -1,5 +1,6 @@
 mod agents;
 pub(super) mod help;
+mod markdown;
 use super::*;
 use ratatui::{
     layout::Rect,
@@ -113,7 +114,7 @@ fn freshness(value: &Value) -> String {
         format!("read {}h ago", seconds / 3600)
     }
 }
-fn detail_lines(task: &Value, store: &Store) -> Vec<Line<'static>> {
+fn detail_lines(task: &Value, store: &Store, width: u16) -> Vec<Line<'static>> {
     let (p, color) = priority(task);
     let mut lines = vec![
         Line::styled(
@@ -164,30 +165,7 @@ fn detail_lines(task: &Value, store: &Store) -> Vec<Line<'static>> {
     if string(task, "body").is_empty() {
         lines.push(Line::from(label("No description.", MUTED)))
     }
-    let mut fenced = false;
-    for raw in clean(string(task, "body")).lines() {
-        let line = raw.trim_end();
-        if line.trim_start().starts_with("```") {
-            fenced = !fenced;
-            continue;
-        }
-        if fenced {
-            lines.push(Line::from(label(format!("  {line}"), MUTED)));
-            continue;
-        }
-        if line.starts_with('#') {
-            lines.push(Line::styled(
-                line.trim_start_matches('#').trim().to_owned(),
-                style(BLUE).add_modifier(Modifier::BOLD),
-            ))
-        } else if line.trim_start().starts_with("- [x]") || line.trim_start().starts_with("- [X]") {
-            lines.push(Line::from(label(line.to_owned(), GREEN)))
-        } else if line.trim_start().starts_with("- [ ]") {
-            lines.push(Line::from(label(line.to_owned(), AMBER)))
-        } else {
-            lines.push(Line::raw(line.to_owned()))
-        }
-    }
+    lines.extend(markdown::render(string(task, "body"), width));
     let children: Vec<_> = store
         .tasks()
         .iter()
@@ -298,7 +276,7 @@ fn detail_lines(task: &Value, store: &Store) -> Vec<Line<'static>> {
             } else {
                 body
             };
-            lines.extend(clean(body).lines().map(|line| Line::raw(line.to_owned())));
+            lines.extend(markdown::render(body, width));
             lines.push(Line::raw(""));
         }
     }
@@ -325,7 +303,7 @@ fn inspector(ui: &Ui, f: &mut ratatui::Frame, store: &Store, area: Rect, expande
     .padding(Padding::horizontal(1));
     if let Some(task) = ui.selected(store) {
         f.render_widget(
-            Paragraph::new(detail_lines(task, store))
+            Paragraph::new(detail_lines(task, store, area.width.saturating_sub(4)))
                 .wrap(Wrap { trim: false })
                 .scroll((if expanded { ui.scroll } else { 0 }, 0))
                 .block(container),
