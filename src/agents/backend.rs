@@ -48,9 +48,47 @@ pub(super) fn command(run: &Run, executable: &std::ffi::OsStr) -> Result<Command
     }
     Ok(command)
 }
+pub(super) fn interactive_command(run: &Run, executable: &std::ffi::OsStr) -> Result<Command> {
+    let session = run
+        .session_id
+        .as_deref()
+        .context("No native session was reported. Press A to start a new agent")?;
+    validate_session(session)?;
+    let mut command = Command::new(executable);
+    command.current_dir(&run.directory);
+    match run.provider {
+        Provider::Codex => {
+            command
+                .args(["resume", session, "--cd"])
+                .arg(&run.directory)
+                .args([
+                    "--sandbox",
+                    if run.mode == Mode::Plan {
+                        "read-only"
+                    } else {
+                        "workspace-write"
+                    },
+                ]);
+        }
+        Provider::Claude => {
+            command.arg(format!("--resume={session}")).args([
+                "--permission-mode",
+                if run.mode == Mode::Plan {
+                    "plan"
+                } else {
+                    "acceptEdits"
+                },
+            ]);
+        }
+    }
+    Ok(command)
+}
 fn validate_session(session: &str) -> Result<()> {
     ensure!(
-        !session.is_empty()
+        session
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
             && session.len() <= 160
             && session
                 .chars()

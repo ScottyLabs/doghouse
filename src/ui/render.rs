@@ -333,7 +333,7 @@ fn inspector(ui: &Ui, f: &mut ratatui::Frame, store: &Store, area: Rect, expande
         )
     } else {
         let message = if ui.local_scope() {
-            "Local directory project.\n\nn  Add a local task\nA  Start an agent for a task\nc  Add a directory\nP  Choose a project"
+            "Local directory project.\n\nn  Add a local task\nA  Start an agent for a task\n+  Add a directory\nP  Choose a project"
         } else if store.catalog.workspaces.is_empty() {
             "Governance has not loaded.\n\ng  Refresh through Collar\nw  Choose a cached workspace"
         } else if ui.repos(store).is_empty() {
@@ -366,7 +366,7 @@ fn task_list(ui: &Ui, f: &mut ratatui::Frame, store: &Store, area: Rect) {
         items.len()
     );
     if items.is_empty() {
-        f.render_widget(Paragraph::new(if ui.my_work {if ui.personal_loading {"\n Reading your assignments, PRs, and review requests through Collar..."} else {"\n No items in this My work view.\n\n s  Refresh your account inbox\n f  Change source filter\n u  All accessible projects"}} else if ui.local_scope(){"\n No local tasks in this view.\n\n n  Add a task\n c  Add a directory\n P  Choose a local project"}else if ui.repos(store).is_empty(){"\n No repositories declared in this project.\n\n P  Choose a project\n G  Open Governance declaration"}else{"\n No tasks in this view.\n\n n  Create a GCD issue\n s  Refresh shared tasks\n h/l  Browse stages\n Esc  Clear search"}).style(style(MUTED)).block(block(title,true).padding(Padding::horizontal(1))),area);
+        f.render_widget(Paragraph::new(if ui.my_work {if ui.personal_loading {"\n Reading your assignments, PRs, and review requests through Collar..."} else {"\n No items in this My work view.\n\n s  Refresh your account inbox\n f  Change source filter\n u  All accessible projects"}} else if ui.local_scope(){"\n No local tasks in this view.\n\n n  Add a task\n +  Add a directory\n P  Choose a local project"}else if ui.repos(store).is_empty(){"\n No repositories declared in this project.\n\n P  Choose a project\n G  Open Governance declaration"}else{"\n No tasks in this view.\n\n n  Create a GCD issue\n s  Refresh shared tasks\n h/l  Browse stages\n Esc  Clear search"}).style(style(MUTED)).block(block(title,true).padding(Padding::horizontal(1))),area);
         return;
     }
     let rows: Vec<ListItem> = items
@@ -926,26 +926,43 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
                 status,
                 if ui.error { Color::LightRed } else { MUTED },
             )),
-            if ui.agent_view {Line::from(label("a Tasks / A Launch / r Resume / s Stop / Enter Result / d Diff / Delete Run / P Publish / ? Help",BLUE))}else{
-            Line::from(vec![
-                label("n", BLUE),
-                label(if ui.local_scope() { " task  " } else { " GCD issue  " }, TEXT),
-                label("m", BLUE),
-                label(" move  ", TEXT),
-                label("C", BLUE), label(" comment  ",TEXT),
-                label("z", BLUE), label(" close/reopen  ",TEXT),
-                label("/", BLUE),
-                label(" search  ", TEXT),
-                label("Enter", BLUE),
-                label(" details  ", TEXT),
-                label("v", BLUE),
-                label(" view  ", TEXT),
-                label("a", BLUE),label(" agents  ",TEXT),label("A",BLUE),label(" launch  ",TEXT),
-                label("?", BLUE),
-                label(" actions  ", TEXT),
-                label("q", BLUE),
-                label(" quit", TEXT),
-            ])
+            if ui.agent_view {
+                Line::from(label(
+                    "Enter Talk / v Result / d Diff / s Stop / Delete Run / a Tasks / ? Help",
+                    BLUE,
+                ))
+            } else {
+                Line::from(vec![
+                    label("n", BLUE),
+                    label(
+                        if ui.local_scope() {
+                            " task  "
+                        } else {
+                            " GCD issue  "
+                        },
+                        TEXT,
+                    ),
+                    label("m", BLUE),
+                    label(" move  ", TEXT),
+                    label("c", BLUE),
+                    label(" comment  ", TEXT),
+                    label("z", BLUE),
+                    label(" close/reopen  ", TEXT),
+                    label("/", BLUE),
+                    label(" search  ", TEXT),
+                    label("Enter", BLUE),
+                    label(" details  ", TEXT),
+                    label("v", BLUE),
+                    label(" view  ", TEXT),
+                    label("a", BLUE),
+                    label(" agents  ", TEXT),
+                    label("A", BLUE),
+                    label(" launch  ", TEXT),
+                    label("?", BLUE),
+                    label(" actions  ", TEXT),
+                    label("q", BLUE),
+                    label(" quit", TEXT),
+                ])
             },
         ])
         .block(

@@ -343,6 +343,12 @@ pub(super) fn key(
         }
         return Ok(false);
     }
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return Ok(false);
+    }
     if key.code == KeyCode::Char('!') {
         ui.error_popup = ui.error;
         return Ok(false);
@@ -369,7 +375,7 @@ pub(super) fn key(
             ui.help = true;
             ui.help_scroll = 0;
         }
-        KeyCode::Char('C' | 'z') => {
+        KeyCode::Char('c' | 'C' | 'z') => {
             ensure!(!ui.offline, "Offline mode cannot write to GCD");
             ensure!(!ui.writing, "A GCD write is already running");
             let task = selected(ui, store)?;
@@ -377,7 +383,7 @@ pub(super) fn key(
                 matches!(string(&task["source"], "kind"), "issue" | "pr"),
                 "Choose a shared issue or PR; use m for local task stages"
             );
-            if key.code == KeyCode::Char('C') {
+            if matches!(key.code, KeyCode::Char('c' | 'C')) {
                 target(ui, &task)?;
                 ui.open_prompt('C', String::new());
             } else {
@@ -396,7 +402,7 @@ pub(super) fn key(
             ui.open_picker(PickKind::Project)
         }
         KeyCode::Char('r') => ui.open_picker(PickKind::Repository),
-        KeyCode::Char('c') => ui.open_prompt('c', String::new()),
+        KeyCode::Char('+') => ui.open_prompt('c', String::new()),
         KeyCode::Char('X') if ui.local_scope() => {
             ensure!(ui.project.is_some(), "Choose a local project with P first");
             ensure!(
@@ -408,7 +414,7 @@ pub(super) fn key(
         KeyCode::Char('G') => {
             ensure!(
                 !ui.local_scope(),
-                "Local directory projects are managed here; c adds a directory"
+                "Local directory projects are managed here; + adds a directory"
             );
             let suffix = if let Some(slug) = &ui.workspace {
                 ensure!(
@@ -690,6 +696,13 @@ mod tests {
             source: 1,
             ..Ui::default()
         };
+        key(
+            &mut ui,
+            &mut store,
+            KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
+            &sender,
+        )?;
+        assert!(ui.confirm_state.is_none());
         key(
             &mut ui,
             &mut store,

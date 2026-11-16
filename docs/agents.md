@@ -18,14 +18,22 @@ Shepherd invokes the installed native CLI with its existing login and model conf
 | A / n | New run for the selected task |
 | r | Resume the native session with a follow-up goal |
 | s | Stop this window's agent and its child tools |
-| Enter | Switch between activity and result |
+| Enter | Open or resume the native Codex/Claude conversation |
+| Ctrl+Z (inside CLI) | Return to Shepherd, keeping the same native process |
+| v | Switch between activity and the last automated result |
+| Delete / D | Confirm deletion of finished run history and transcript |
 | d | Review implementation status and diff |
 | P | Review a result comment; Enter explicitly publishes it to GCD |
 | x | Remove a clean isolated checkout |
-| Delete / D | Confirm deletion of finished run history and transcript |
 | f | Toggle current project and all local runs |
 | t / O | Return to the task / open its GCD issue |
 | a / Esc | Return to tasks |
+
+Enter takes you into the real native CLI in the same terminal. Ctrl+Z suspends that CLI and returns to Shepherd; Enter resumes the same process, including its in-memory draft. Exiting the CLI also returns to Shepherd. Other background agents continue being polled. Opening a still-running automated turn first asks to stop that turn and take over its session. The owning Shepherd window retains the checkout and task locks while a native session is suspended; `s` stops it.
+
+After an interactive conversation, the saved automated result is labeled as historical and cannot be published as a fresh result. An automated follow-up with `r` can produce a new publishable result. Native session history remains available through Enter.
+
+Delete removes only Shepherd's run record and transcript. It requires confirmation, blocks active/suspended runs and pending publication, and retains project files, worktrees, native session history, and GCD comments. `x` separately removes a clean worktree.
 
 Up to four runs can execute in one window. Local ownership locks prevent another Shepherd window from using the same task or checkout concurrently. Resume retains the original checkout and native session. A changed HEAD must be preserved before starting a new run. Cleanup refuses dirty worktrees or worktrees containing new commits. Stopping a run keeps its changes and result.
 
@@ -57,5 +65,3 @@ A plan file is a JSON array with `title` and `body` fields. A human accepts or d
 GCD issue edits in the TUI are explicit writes through Collar. Writes are not automatically retried. If completion is uncertain, inspect the issue before another attempt. A local revision or claim grants no permission to push, merge, publish, or close remote issues.
 
 Use `SHEPHERD_COLLAR` to select a specific Collar binary during integration testing. Production uses `collar` on PATH. No separate tokens or direct credential-store reads are required. Verification of remote writes uses a fake executable and temporary files; never test them against live repositories.
-
-Run deletion keeps all project files, worktrees, native sessions, and shared comments. Active runs and pending publication block deletion.

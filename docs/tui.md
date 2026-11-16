@@ -27,7 +27,7 @@ The list keeps task details beside the selection when the terminal is wide enoug
 | o | Set GCD assignees using comma-separated logins |
 | p | Set shared priority through existing labels |
 | m | Change shared stage; Done closes the issue on GCD |
-| C | Write a multiline issue or PR comment through Collar; Ctrl+S posts |
+| c / C | Write a multiline issue or PR comment through Collar; Ctrl+S posts |
 | z | Close or reopen an issue or unmerged PR through Collar; Enter confirms |
 | O | Open the issue or PR in the browser |
 | s | Refresh current scope from GCD |
@@ -53,7 +53,7 @@ The GCD API does not provide an atomic compare-and-swap for these edits. Shepher
 
 ## Local directory projects
 
-Press `c` to add an existing directory. Relative paths and `~/` are accepted. It appears under **Local projects** in the workspace picker. No Git repository, Collar login, or Governance declaration is required. Select a project with `P`, then use `n` to create tasks; title, description, owner, priority, and stage edits save locally. These tasks are labeled LOCAL and appear in the ordinary task view.
+Press `+` to add an existing directory. Relative paths and `~/` are accepted. It appears under **Local projects** in the workspace picker. No Git repository, Collar login, or Governance declaration is required. Select a project with `P`, then use `n` to create tasks; title, description, owner, priority, and stage edits save locally. These tasks are labeled LOCAL and appear in the ordinary task view.
 
 `A` launches an agent using that project's registered directory. Plan works in plain directories. Implement requires a committed Git root and uses a separate worktree. Local tasks have no GCD issue, so result publication is unavailable.
 
@@ -76,3 +76,5 @@ My work is a single inbox across projects and stages. It includes open issues as
 `shepherd inbox` refreshes the same account data without opening the TUI. API reads paginate to completion; failures preserve the previous account snapshot and remain visible. Expanded task detail reads discussion comments through Collar. Ordinary refreshes preserve cached comments.
 
 The keyboard guide groups navigation, task, Collar, agent, and local actions. It uses two columns in wide terminals and one in narrow terminals; arrows and Page Up/Down scroll, and Esc closes it.
+
+In Agents, Enter opens the native conversation, Ctrl+Z returns to Shepherd, and Enter resumes the same process. `v` shows the last automated result. Delete confirms removal of finished history.

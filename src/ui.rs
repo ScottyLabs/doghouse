@@ -90,6 +90,8 @@ pub(crate) struct Ui {
     agent_diff: Option<String>,
     publish_run: Option<String>,
     delete_run: Option<String>,
+    handoff: Option<String>,
+    take_over: Option<String>,
     error_popup: bool,
 }
 impl Ui {
@@ -577,7 +579,7 @@ fn run_ui(
     let (sender, receiver) = mpsc::channel::<Job>();
     let mut manager = crate::agents::Manager::open(&store.dir)?;
     if ui.local_scope() {
-        ui.message = "Local directory projects / c add directory / n task / A agent".into();
+        ui.message = "Local directory projects / + add directory / n task / A agent".into();
     } else if offline {
         ui.message = "OFFLINE / cached Governance and GCD data".into();
     } else {
@@ -592,7 +594,51 @@ fn run_ui(
             ui.error = true;
             ui.message = format!("Agent state could not be saved: {error:#}");
         }
+        if manager.take_terminal_reset() {
+            ratatui::restore();
+            *terminal = ratatui::init();
+            crossterm::execute!(io::stdout(), event::EnableBracketedPaste)?;
+            terminal.clear()?;
+        }
+        if let Some(id) = ui.handoff.clone()
+            && manager
+                .get(&id)
+                .is_ok_and(|run| !run.state.active() || manager.is_suspended(&id))
+        {
+            ui.handoff = None;
+            FileExt::unlock(&store._lock)?;
+            let _ = crossterm::execute!(io::stdout(), event::DisableBracketedPaste);
+            ratatui::restore();
+            println!(
+                "Opening the native conversation. Ctrl+Z returns to Shepherd; exit the CLI to close it."
+            );
+            let result = manager.interact(&id, &interrupted);
+            FileExt::lock_exclusive(&store._lock)?;
+            *terminal = ratatui::init();
+            crossterm::execute!(io::stdout(), event::EnableBracketedPaste)?;
+            terminal.clear()?;
+            store.reload()?;
+            ui.error = result.is_err();
+            ui.message = match result {
+                Ok(()) => {
+                    if manager.is_suspended(&id) {
+                        "Conversation paused / Enter resumes / s stops / v last automated result"
+                            .into()
+                    } else {
+                        "Returned from the native conversation / Enter opens it again / v last automated result".into()
+                    }
+                }
+                Err(error) => format!("{error:#}"),
+            };
+        }
         ui.runs = manager.snapshots();
+        if ui
+            .delete_run
+            .as_ref()
+            .is_some_and(|id| !ui.runs.iter().any(|run| run.id == *id))
+        {
+            ui.delete_run = None;
+        }
         ui.active_runs = manager.active_count();
         ui.run_row = ui
             .run_row

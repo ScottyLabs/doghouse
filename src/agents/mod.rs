@@ -17,6 +17,7 @@ use std::{
     time::Instant,
 };
 mod backend;
+mod interactive;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -73,6 +74,8 @@ pub(crate) enum State {
     Running,
     Stopping,
     Completed,
+    Continued,
+    Suspended,
     Failed,
     Stopped,
     Attention,
@@ -84,6 +87,8 @@ impl State {
             Self::Running => "Running",
             Self::Stopping => "Stopping",
             Self::Completed => "Ready to review",
+            Self::Continued => "Continued in CLI",
+            Self::Suspended => "Conversation paused",
             Self::Failed => "Failed",
             Self::Stopped => "Stopped",
             Self::Attention => "Needs attention",
@@ -91,7 +96,7 @@ impl State {
         }
     }
     pub fn active(self) -> bool {
-        matches!(self, Self::Running | Self::Stopping)
+        matches!(self, Self::Running | Self::Stopping | Self::Suspended)
     }
 }
 #[derive(Clone, Deserialize, Serialize)]
@@ -130,6 +135,8 @@ pub(crate) struct Run {
     pub needs_attention: bool,
     pub log_truncated: bool,
     pub publication: String,
+    #[serde(default)]
+    pub native_continued: bool,
 }
 impl Run {
     fn event(&mut self, kind: &str, message: &str) {
@@ -174,6 +181,7 @@ impl Run {
             needs_attention: false,
             log_truncated: false,
             publication: "not-published".into(),
+            native_continued: false,
         }
     }
 }
@@ -206,6 +214,7 @@ struct Active {
     exited: Option<bool>,
     exited_at: Option<Instant>,
     _leases: Vec<Lease>,
+    native_terminal: bool,
 }
 struct StreamLine {
     id: String,
@@ -240,6 +249,9 @@ pub(crate) struct Manager {
     receiver: Receiver<StreamLine>,
     executables: [OsString; 2],
     refreshed_at: Instant,
+    interactive: Option<String>,
+    suspended: BTreeMap<String, interactive::Suspended>,
+    terminal_reset: bool,
 }
 fn find_executable(name: &OsStr) -> Option<PathBuf> {
     let path = PathBuf::from(name);
@@ -425,6 +437,9 @@ impl Manager {
             receiver,
             executables: [Provider::Codex.executable(), Provider::Claude.executable()],
             refreshed_at: Instant::now(),
+            interactive: None,
+            suspended: BTreeMap::new(),
+            terminal_reset: false,
         })
     }
     pub fn snapshots(&self) -> Vec<Run> {
@@ -433,7 +448,7 @@ impl Manager {
         runs
     }
     pub fn active_count(&self) -> usize {
-        self.active.len()
+        self.active.len() + self.suspended.len() + usize::from(self.interactive.is_some())
     }
     pub fn get(&self, id: &str) -> Result<&Run> {
         self.runs.get(id).context("Agent run not found")
@@ -556,6 +571,7 @@ impl Manager {
             needs_attention: false,
             log_truncated: false,
             publication: "not-published".into(),
+            native_continued: false,
         };
         let mut run = run;
         run.event("Setup", &if instructions.is_empty() { "No AGENTS.md in the project or its parents; agent will inspect project documentation".into() } else { format!("Loaded project instructions: {}",instructions.iter().map(|(path,_)|path.display().to_string()).collect::<Vec<_>>().join(", ")) });
@@ -644,6 +660,7 @@ impl Manager {
         run.needs_attention = false;
         run.log_truncated = false;
         run.publication = "not-published".into();
+        run.native_continued = false;
         self.runs.insert(id.clone(), run);
         self.persist(&id)?;
         let result=self.spawn(&id,&format!("Continue the existing task in this checkout. Do not push, publish, merge, change Governance, close issues, or expose credentials. Return evidence for human review.\n\nUSER FOLLOW-UP:\n{goal}"));
@@ -727,6 +744,7 @@ impl Manager {
                 exited: None,
                 exited_at: None,
                 _leases: leases,
+                native_terminal: false,
             },
         );
         let prompt = prompt.as_bytes().to_vec();
@@ -753,7 +771,9 @@ impl Manager {
     }
     fn refresh_external(&mut self) -> Result<()> {
         self.runs.retain(|id, _| {
-            self.active.contains_key(id) || self.root.join(id).join("run.json").is_file()
+            self.active.contains_key(id)
+                || self.interactive.as_deref() == Some(id)
+                || self.root.join(id).join("run.json").is_file()
         });
         let mut paths = fs::read_dir(&self.root)?
             .map(|entry| entry.map(|e| e.path()))
@@ -768,7 +788,10 @@ impl Manager {
             let Some(id) = path.file_name().and_then(OsStr::to_str) else {
                 continue;
             };
-            if self.active.contains_key(id) {
+            if self.active.contains_key(id)
+                || self.suspended.contains_key(id)
+                || self.interactive.as_deref() == Some(id)
+            {
                 continue;
             }
             let mut run = match self.read_record(id) {
@@ -854,6 +877,9 @@ impl Manager {
             if let Some(success) = active.exited
                 && active.open_streams == 0
             {
+                if active.native_terminal {
+                    self.terminal_reset = true;
+                }
                 ended.push((id.clone(), success, active.stopping.is_some()));
             }
         }
@@ -890,7 +916,13 @@ impl Manager {
         }
         Ok(())
     }
+    pub fn take_terminal_reset(&mut self) -> bool {
+        std::mem::take(&mut self.terminal_reset)
+    }
     pub fn stop(&mut self, id: &str) -> Result<()> {
+        if let Some(session) = self.suspended.remove(id) {
+            self.active.insert(id.into(), session.into_active()?);
+        }
         let active = self
             .active
             .get_mut(id)
@@ -996,6 +1028,10 @@ impl Manager {
     }
     pub fn publication_body(&self, id: &str) -> Result<String> {
         let run = self.get(id)?;
+        ensure!(
+            !run.native_continued,
+            "This conversation continued in the native CLI. Resume an automated turn to generate a fresh publishable result"
+        );
         ensure!(
             !run.state.active() && run.state != State::Unattached && !run.result.trim().is_empty(),
             "Wait for an agent result before publishing"
@@ -1151,6 +1187,18 @@ fn stream(
 }
 impl Drop for Manager {
     fn drop(&mut self) {
+        let suspended = self.suspended.keys().cloned().collect::<Vec<_>>();
+        self.suspended.clear();
+        for id in suspended {
+            if let Some(run) = self.runs.get_mut(&id) {
+                run.state = State::Stopped;
+                run.event(
+                    "Stopped",
+                    "Controller closed; paused native process stopped",
+                );
+            }
+            let _ = self.persist(&id);
+        }
         for (id, active) in &mut self.active {
             let _ = signal(active, Signal::SIGKILL);
             let _ = active.child.wait();

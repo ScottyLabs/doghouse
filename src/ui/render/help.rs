@@ -107,8 +107,10 @@ fn contents(ui: &Ui) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
             "MANAGE",
             &[
                 ("j / k", "Choose a run"),
-                ("Enter", "Activity / result"),
-                ("r", "Continue its native session"),
+                ("Enter", "Open native conversation"),
+                ("Ctrl+Z", "Return to Shepherd"),
+                ("v", "Activity / result"),
+                ("r", "Automated follow-up"),
                 ("s", "Stop the owned process group"),
                 ("f", "Current project / all runs"),
             ],
@@ -170,7 +172,7 @@ fn contents(ui: &Ui) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
                 &mut left,
                 "THROUGH COLLAR",
                 &[
-                    ("C", "Write a comment"),
+                    ("c", "Write a comment"),
                     ("z", "Close / reopen, with confirmation"),
                     ("O", "Open the source on GCD"),
                 ],
@@ -202,7 +204,7 @@ fn contents(ui: &Ui) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
             &mut right,
             "LOCAL",
             &[
-                ("c", "Add a directory project"),
+                ("+", "Add a directory project"),
                 ("N", "Unsent draft"),
                 ("X", "Forget a local registration"),
                 ("!", "Read the last error"),

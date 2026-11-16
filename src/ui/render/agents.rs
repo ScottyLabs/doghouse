@@ -4,6 +4,8 @@ fn state_color(state: State) -> Color {
     match state {
         State::Running => BLUE,
         State::Completed => GREEN,
+        State::Continued => BLUE,
+        State::Suspended => AMBER,
         State::Stopping | State::Attention => AMBER,
         State::Failed => Color::Red,
         State::Stopped | State::Unattached => MUTED,
@@ -12,7 +14,7 @@ fn state_color(state: State) -> Color {
 fn selected_run<'a>(ui: &'a Ui, store: &Store) -> Option<&'a Run> {
     ui.visible_runs(store).get(ui.run_row).copied()
 }
-fn lines_for(run: &Run, output: bool) -> Vec<Line<'static>> {
+fn lines_for(run: &Run, output: bool, _width: u16) -> Vec<Line<'static>> {
     if output {
         let mut lines = vec![
             Line::styled(
@@ -21,9 +23,16 @@ fn lines_for(run: &Run, output: bool) -> Vec<Line<'static>> {
             ),
             Line::raw(""),
         ];
+        if run.native_continued {
+            lines.push(Line::from(label(
+                "Last automated result; this conversation continued in the native CLI.",
+                AMBER,
+            )));
+            lines.push(Line::raw(""));
+        }
         if run.result.is_empty() {
             lines.push(Line::from(label(
-                "No result yet. Enter returns to live activity.",
+                "No automated result yet. v returns to live activity.",
                 MUTED,
             )))
         }
@@ -127,7 +136,7 @@ fn lines_for(run: &Run, output: bool) -> Vec<Line<'static>> {
     if !run.result.is_empty() {
         lines.push(Line::raw(""));
         lines.push(Line::from(label(
-            "Enter  read result   /   d review diff   /   P publish reviewed result",
+            "Enter  open conversation   /   v read result   /   d review diff",
             BLUE,
         )))
     }
@@ -224,20 +233,24 @@ pub(super) fn view(ui: &Ui, f: &mut ratatui::Frame, store: &Store, area: Rect) {
     );
     if let Some(run) = selected_run(ui, store) {
         f.render_widget(
-            Paragraph::new(lines_for(run, ui.run_output))
-                .wrap(Wrap { trim: false })
-                .scroll((ui.run_scroll, 0))
-                .block(
-                    block(
-                        if ui.run_output {
-                            "Result / Enter activity"
-                        } else {
-                            "Run / Enter result"
-                        },
-                        false,
-                    )
-                    .padding(Padding::horizontal(1)),
-                ),
+            Paragraph::new(lines_for(
+                run,
+                ui.run_output,
+                panes[1].width.saturating_sub(4),
+            ))
+            .wrap(Wrap { trim: false })
+            .scroll((ui.run_scroll, 0))
+            .block(
+                block(
+                    if ui.run_output {
+                        "Result / v activity / Enter conversation"
+                    } else {
+                        "Run / Enter conversation / v result"
+                    },
+                    false,
+                )
+                .padding(Padding::horizontal(1)),
+            ),
             panes[1],
         );
     }
@@ -400,6 +413,31 @@ pub(super) fn overlays(ui: &Ui, f: &mut ratatui::Frame) {
             ])
             .wrap(Wrap { trim: false }),
             regions[4],
+        );
+    }
+    if let Some(id) = &ui.take_over
+        && let Some(run) = ui.runs.iter().find(|run| run.id == *id)
+    {
+        let rect = popup(area, 80, 12);
+        f.render_widget(Clear, rect);
+        f.render_widget(
+            Paragraph::new(vec![
+                Line::styled(
+                    clean(&run.task_title),
+                    style(TEXT).add_modifier(Modifier::BOLD),
+                ),
+                Line::raw(""),
+                Line::raw("Stop the background turn and take over this conversation?"),
+                Line::from(label(
+                    "Progress and project files are retained. Exit the native CLI to return.",
+                    MUTED,
+                )),
+                Line::raw(""),
+                Line::from(label("Enter take over / Esc cancel", BLUE)),
+            ])
+            .wrap(Wrap { trim: false })
+            .block(block("Open active conversation", true).padding(Padding::new(2, 1, 1, 0))),
+            rect,
         );
     }
     if let Some(id) = &ui.delete_run

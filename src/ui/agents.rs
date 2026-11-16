@@ -114,6 +114,26 @@ pub(super) fn key(
     sender: &Sender<Job>,
     manager: &mut Manager,
 ) -> Result<bool> {
+    if let Some(id) = ui.take_over.clone() {
+        match key.code {
+            KeyCode::Esc => ui.take_over = None,
+            KeyCode::Enter => {
+                manager.stop(&id)?;
+                ui.take_over = None;
+                ui.handoff = Some(id);
+                ui.message="Stopping the background turn, then opening its native conversation / Esc cancels takeover".into();
+            }
+            _ => {}
+        }
+        return Ok(true);
+    }
+    if ui.handoff.is_some() {
+        if key.code == KeyCode::Esc {
+            ui.handoff = None;
+            ui.message = "Takeover cancelled; the background run remains stopped".into();
+        }
+        return Ok(true);
+    }
     if let Some(id) = ui.delete_run.clone() {
         match key.code {
             KeyCode::Esc => ui.delete_run = None,
@@ -300,6 +320,12 @@ pub(super) fn key(
         }
         return Ok(true);
     }
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return Ok(true);
+    }
     if key.code == KeyCode::Char('A') {
         launch(ui, store, manager, None)?;
         return Ok(true);
@@ -371,7 +397,7 @@ pub(super) fn key(
                     local::projects(&store.data)?
                         .iter()
                         .any(|entry| entry.id == project),
-                    "Local project was forgotten. Re-add its directory with c to restore its tasks"
+                    "Local project was forgotten. Re-add its directory with + to restore its tasks"
                 );
                 ui.workspace = Some(local::WORKSPACE.into());
                 ui.project = Some(project.into());
@@ -431,6 +457,24 @@ pub(super) fn key(
             ensure!(status.success(), "Browser launch failed");
         }
         KeyCode::Enter => {
+            ensure!(!ui.offline, "Offline mode cannot open a model session");
+            ensure!(!ui.writing, "Wait for the GCD write to finish");
+            let run = selected_run(ui, store)?;
+            ensure!(
+                run.session_id.is_some(),
+                "This run has no native session. Press A to start a new agent"
+            );
+            ensure!(
+                run.state != crate::agents::State::Unattached,
+                "Open this active conversation from its owning Shepherd window"
+            );
+            if run.state.active() && !manager.is_suspended(&run.id) {
+                ui.take_over = Some(run.id);
+            } else {
+                ui.handoff = Some(run.id);
+            }
+        }
+        KeyCode::Char('v') => {
             ui.run_output = !ui.run_output;
             ui.run_scroll = 0;
         }
