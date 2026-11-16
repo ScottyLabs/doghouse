@@ -397,7 +397,28 @@ fn import_snapshot(
         }
     });
     store.data["retiredTasks"] = json!(retired);
-    if let Err(error) = import_records(store, repo, issues, prs) {
+    let newer = store
+        .tasks()
+        .iter()
+        .filter(|task| {
+            task["source"]["syncedAt"]
+                .as_str()
+                .and_then(|timestamp| timestamp.parse::<u128>().ok())
+                .is_some_and(|timestamp| timestamp > cutoff)
+        })
+        .map(|task| string(&task["source"], "id").to_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+    let issues = issues
+        .iter()
+        .filter(|record| !newer.contains(&format!("{repo}:issue:{}", record["number"])))
+        .cloned()
+        .collect::<Vec<_>>();
+    let prs = prs
+        .iter()
+        .filter(|record| !newer.contains(&format!("{repo}:pr:{}", record["number"])))
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Err(error) = import_records(store, repo, &issues, &prs) {
         store.data = previous;
         return Err(error);
     }
@@ -447,7 +468,7 @@ fn import_records(store: &mut Store, repo: &str, issues: &[Value], prs: &[Value]
                 t["localPlan"] =
                     json!({"stage":t["stage"],"priority":t["priority"],"owner":t["owner"]});
             }
-            t["source"] = json!({"id":source_id,"kind":kind,"number":number,"state":record["state"],"url":format!("https://git.cmu.dev/{repo}/{}/{number}",if kind=="pr"{"pulls"}else{"issues"}),"todos":todos(string(record,"body")),"head":record["headRefOid"],"isDraft":record["isDraft"],"closes":shared::closing_references(string(record,"body")),"labels":record["labels"],"remote":record["_remote"],"agent_reports":previous["source"]["agent_reports"],"syncedAt":now()});
+            t["source"] = json!({"id":source_id,"kind":kind,"number":number,"state":record["state"],"url":format!("https://git.cmu.dev/{repo}/{}/{number}",if kind=="pr"{"pulls"}else{"issues"}),"todos":todos(string(record,"body")),"head":record["headRefOid"],"isDraft":record["isDraft"],"closes":shared::closing_references(string(record,"body")),"labels":record["labels"],"remote":record["_remote"],"agent_reports":previous["source"]["agent_reports"],"comments":previous["source"]["comments"],"syncedAt":now()});
             t["stage"] = json!(shared::stage(record, kind));
             t["priority"] = json!(shared::priority(record));
             t["owner"] = json!(

@@ -26,6 +26,8 @@ The list keeps task details beside the selection when the terminal is wide enoug
 | o | Set GCD assignees using comma-separated logins |
 | p | Set shared priority through existing labels |
 | m | Change shared stage; Done closes the issue on GCD |
+| C | Write a comment through Collar; Ctrl+S posts |
+| z | Close/reopen an issue or unmerged PR through Collar; Enter confirms |
 | O | Open the issue or PR in the browser |
 | s | Refresh current scope from GCD |
 | g / G | Refresh Governance / open its declaration |
@@ -63,3 +65,5 @@ shepherd local task LOCAL_PROJECT_ID 'Review the Terrier trial'
 shepherd --workspace @local --project LOCAL_PROJECT_ID
 shepherd local remove LOCAL_PROJECT_ID
 ```
+
+The grouped keyboard guide uses two columns in wide terminals. Arrows and Page Up/Down scroll; Esc closes it.

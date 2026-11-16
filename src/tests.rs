@@ -198,3 +198,23 @@ fn snapshot_started_before_creation_keeps_the_newer_task() -> Result<()> {
     assert!(store.tasks().is_empty());
     Ok(())
 }
+
+#[test]
+fn an_older_snapshot_cannot_undo_a_local_pr_state_refresh() -> Result<()> {
+    let temporary = tempfile::tempdir()?;
+    let mut store = Store::open(temporary.path().into())?;
+    let open = json!({"number":1,"title":"Change","state":"OPEN","headRefOid":"abc"});
+    import_records(
+        &mut store,
+        "ScottyLabs/example",
+        &[],
+        std::slice::from_ref(&open),
+    )?;
+    let started = now();
+    let mut closed = open.clone();
+    closed["state"] = json!("CLOSED");
+    import_records(&mut store, "ScottyLabs/example", &[], &[closed])?;
+    import_snapshot(&mut store, "ScottyLabs/example", &[], &[open], &started)?;
+    assert_eq!(store.tasks()[0]["source"]["state"], "CLOSED");
+    Ok(())
+}

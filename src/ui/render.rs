@@ -1,4 +1,5 @@
 mod agents;
+pub(super) mod help;
 use super::*;
 use ratatui::{
     layout::Rect,
@@ -274,24 +275,28 @@ fn detail_lines(task: &Value, store: &Store) -> Vec<Line<'static>> {
             }
         }
     }
-    if let Some(reports) = task["source"]["agent_reports"]
+    if let Some(reports) = task["source"]["comments"]
         .as_array()
+        .or_else(|| task["source"]["agent_reports"].as_array())
         .filter(|r| !r.is_empty())
     {
-        section(&mut lines, "SHARED AGENT RESULTS / GCD COMMENTS");
+        section(&mut lines, "DISCUSSION / GCD COMMENTS");
         for report in reports {
             lines.push(Line::from(label(
-                format!(
-                    "Reviewed and posted by {}",
-                    string(&report["user"], "login")
-                ),
+                report["user"]["login"]
+                        .as_str()
+                        .or_else(|| report["author"]["login"].as_str())
+                        .unwrap_or("Unknown author").to_string(),
                 BLUE,
             )));
             let body = string(report, "body");
-            let body = body
-                .split_once("-->")
-                .map(|(_, body)| body.trim())
-                .unwrap_or(body);
+            let body = if body.starts_with("<!-- shepherd-run:") {
+                body.split_once("-->")
+                    .map(|(_, body)| body.trim())
+                    .unwrap_or(body)
+            } else {
+                body
+            };
             lines.extend(clean(body).lines().map(|line| Line::raw(line.to_owned())));
             lines.push(Line::raw(""));
         }
@@ -843,6 +848,8 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
                 label(if ui.local_scope() { " task  " } else { " GCD issue  " }, TEXT),
                 label("m", BLUE),
                 label(" move  ", TEXT),
+                label("C", BLUE), label(" comment  ",TEXT),
+                label("z", BLUE), label(" close/reopen  ",TEXT),
                 label("/", BLUE),
                 label(" search  ", TEXT),
                 label("Enter", BLUE),
@@ -865,67 +872,50 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
         regions[3],
     );
     if ui.help {
-        let rect = popup(area, 78, 28);
+        help::draw(ui, f, store);
+    }
+    if let Some(task) = &ui.confirm_state {
+        let closing = task["source"]["state"] == "OPEN";
+        let is_pr = task["source"]["kind"] == "pr";
+        let rect = popup(area, 78, 12);
         f.render_widget(Clear, rect);
-        let lines = if ui.agent_view {
-            vec![
-                "AGENTS / THIS MACHINE",
-                "  A / n   New run for the selected task",
-                "  Tab     Next field in the launch form",
-                "  Ctrl+S  Launch after reviewing the settings",
-                "",
-                "MANAGE",
-                "  j/k     Select run                 r   Resume with follow-up",
-                "  s       Stop run and child tools   f   All projects / current scope",
-                "  Enter   Result / live activity     d   Review worktree diff",
-                "  PgUp/Dn Scroll output              x   Remove a clean worktree",
-                "",
-                "SHARE",
-                "  P       Review and publish result as a GCD comment",
-                "  t       Go to its project task     O   Open issue on GCD",
-                "",
-                "Runs use native CLI sessions and permissions. No bypass flags.",
-                "Implementation checkouts are kept for review; dirty ones are not deleted.",
-                "Quit after runs finish or stop. Ctrl+C force-stops owned runs.",
-                "",
-                "a returns to tasks. Press any key to close this help.",
-            ]
-        } else {
-            vec![
-                "NAVIGATE",
-                "  h/l or arrows   Change stage     j/k   Select task",
-                "  1-5             Jump to stage    Tab   Next repository",
-                "  Enter           Expand detail    Esc   Back / clear search",
-                "",
-                "ORGANIZE",
-                "  n   Create GCD issue             m   Change shared stage",
-                "  e   Edit issue title             d   Edit description",
-                "  o   Set GCD assignees            p   Set shared priority",
-                "  O   Open imported source on GCD  b   Export agent brief",
-                "",
-                "FOCUS",
-                "  /   Search tasks                f   Sources / local drafts",
-                "  w   Governance workspace        P   Governance project",
-                "  v   Task list / kanban           s   Refresh shared tasks",
-                "  r   Project repository          g   Refresh Governance",
-                "  G   Open Governance declaration",
-                "",
-                "REVIEW",
-                "  N   Unsent local draft          a   Agents view",
-                "  A   Launch Codex / Claude Code  !   Last error details",
-                "  c   Add local directory        X   Forget local project",
-                "",
-                "Edits to GCD issues are shared. Local drafts remain unsent.",
-                "",
-                "Press any key to return.",
-            ]
-        };
+        let action = if closing { "Close" } else { "Reopen" };
         f.render_widget(
-            Paragraph::new(lines.join("\n"))
-                .style(style(TEXT))
-                .block(block("Actions", true).padding(Padding::new(2, 1, 1, 0))),
+            Paragraph::new(vec![
+                Line::styled(
+                    clean(string(task, "title")),
+                    style(TEXT).add_modifier(Modifier::BOLD),
+                ),
+                Line::from(label(
+                    format!("{} / {}", string(task, "repo"), reference(task)),
+                    MUTED,
+                )),
+                Line::raw(""),
+                Line::raw(format!(
+                    "{action} this {} on GCD through Collar?",
+                    if is_pr { "pull request" } else { "issue" }
+                )),
+                Line::from(label(
+                    if is_pr {
+                        "Closing a PR does not merge it. Its branch is retained."
+                    } else {
+                        "Its comments and history are retained."
+                    },
+                    MUTED,
+                )),
+                Line::raw(""),
+                Line::from(label(format!("Enter {action} / Esc cancel"), BLUE)),
+            ])
+            .wrap(Wrap { trim: false })
+            .block(
+                block(
+                    format!("{action} {}", if is_pr { "pull request" } else { "issue" }),
+                    true,
+                )
+                .padding(Padding::new(2, 1, 1, 0)),
+            ),
             rect,
-        )
+        );
     }
     if let Some(stage) = ui.moving {
         let rect = popup(area, 44, 11);
@@ -1052,6 +1042,10 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
             return;
         }
         let (mut title, mut hint) = match mode {
+            'C' => (
+                "Comment through Collar",
+                "Enter new line / Ctrl+S posts / Esc cancels",
+            ),
             '/' => ("Search tasks", "Enter apply  ·  Esc cancel"),
             'n' if ui.local_scope() => (
                 "New local task",
@@ -1106,9 +1100,25 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
                 _ => {}
             }
         }
-        let rect = popup(area, 76, if *mode == 'd' { 18 } else { 8 });
+        let rect = popup(area, 76, if matches!(*mode, 'd' | 'C') { 18 } else { 8 });
         f.render_widget(Clear, rect);
         let mut text = vec![Line::from(label(hint, MUTED)), Line::raw("")];
+        if *mode == 'C'
+            && let Some((id, _)) = &ui.edit_target
+                && let Some(task) = store.tasks().iter().find(|task| task["id"] == *id) {
+                    text.insert(
+                        0,
+                        Line::from(label(
+                            format!(
+                                "{} / {} / {}",
+                                string(task, "repo"),
+                                reference(task),
+                                string(task, "title")
+                            ),
+                            BLUE,
+                        )),
+                    );
+                }
         if *mode == 'c' {
             text.insert(
                 0,

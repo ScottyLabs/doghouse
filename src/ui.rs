@@ -23,6 +23,8 @@ enum Job {
     Written(String, Result<Value>, bool),
     RunPublished(String, Result<Value>),
     Reports(String, Result<Vec<Value>>),
+    Commented(String, Result<Value>),
+    StateChanged(String, String, Result<Value>),
 }
 fn refresh_failure(repository: &str, error: &anyhow::Error) -> String {
     let detail = format!("{error:#}");
@@ -54,6 +56,8 @@ pub(crate) struct Ui {
     scroll: u16,
     agents: bool,
     help: bool,
+    help_scroll: u16,
+    confirm_state: Option<Value>,
     prompt: Option<(char, String)>,
     picker: Option<Picker>,
     message: String,
@@ -378,6 +382,36 @@ impl Ui {
         });
         Ok(())
     }
+    fn comment(&mut self, task: Value, body: String, sender: &Sender<Job>) -> Result<()> {
+        ensure!(!self.offline, "Offline mode cannot comment on GCD");
+        ensure!(!self.writing, "A GCD write is already running");
+        self.writing = true;
+        self.pending_edit = Some(('C', body.clone()));
+        self.message = "Posting comment through Collar".into();
+        let sender = sender.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send(Job::Commented(
+                string(&task, "id").into(),
+                shared::comment(&task, &body),
+            ));
+        });
+        Ok(())
+    }
+    fn change_state(&mut self, task: Value, sender: &Sender<Job>) -> Result<()> {
+        ensure!(!self.offline, "Offline mode cannot change GCD state");
+        ensure!(!self.writing, "A GCD write is already running");
+        self.writing = true;
+        self.message = "Changing state through Collar".into();
+        let sender = sender.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send(Job::StateChanged(
+                string(&task, "repo").into(),
+                string(&task["source"], "kind").into(),
+                shared::change_state(&task),
+            ));
+        });
+        Ok(())
+    }
     fn create_issue(&mut self, repo: String, title: String, sender: &Sender<Job>) -> Result<()> {
         ensure!(!self.offline, "Offline: use N for an unsent local draft");
         ensure!(!self.writing, "A GCD write is already in progress");
@@ -607,9 +641,61 @@ fn run_ui(
                     Job::Reports(id, result) => {
                         let reports = result?;
                         if let Ok(task) = store.task_mut(&id) {
-                            task["source"]["agent_reports"] = json!(reports);
+                            task["source"]["comments"] = json!(reports);
                             store.save()?;
                         }
+                    }
+                    Job::Commented(id, result) => {
+                        ui.writing = false;
+                        match result {
+                            Ok(comment) => {
+                                let task = store.task_mut(&id)?;
+                                if !task["source"]["comments"].is_array() {
+                                    task["source"]["comments"] = json!([]);
+                                }
+                                task["source"]["comments"]
+                                    .as_array_mut()
+                                    .context("Invalid comments")?
+                                    .push(comment);
+                                store.save()?;
+                                ui.pending_edit = None;
+                                ui.message =
+                                    "Comment posted through Collar. Enter opens the discussion."
+                                        .into();
+                            }
+                            Err(error) => {
+                                if let Some((mode, body)) = ui.pending_edit.take() {
+                                    ui.open_prompt(mode, body);
+                                }
+                                return Err(error);
+                            }
+                        }
+                    }
+                    Job::StateChanged(repo, kind, result) => {
+                        ui.writing = false;
+                        let record = result?;
+                        if kind == "pr" {
+                            import_records(store, &repo, &[], std::slice::from_ref(&record))?;
+                        } else {
+                            import_records(store, &repo, std::slice::from_ref(&record), &[])?;
+                        }
+                        ui.source = if kind == "pr" { 2 } else { 1 };
+                        ui.query.clear();
+                        ui.agents = false;
+                        ui.focus(store, &repo, &record["number"]);
+                        ui.message = format!(
+                            "{} {} through Collar",
+                            if record["state"] == "OPEN" {
+                                "Reopened"
+                            } else {
+                                "Closed"
+                            },
+                            if kind == "pr" {
+                                "PR (unmerged)"
+                            } else {
+                                "issue"
+                            }
+                        );
                     }
                     Job::Written(repo, result, created) => {
                         ui.writing = false;
@@ -660,7 +746,12 @@ fn run_ui(
             ui.error_popup = false;
             continue;
         }
-        if !ui.help && ui.prompt.is_none() && ui.picker.is_none() && ui.moving.is_none() {
+        if !ui.help
+            && ui.prompt.is_none()
+            && ui.picker.is_none()
+            && ui.moving.is_none()
+            && ui.confirm_state.is_none()
+        {
             match agents::key(&mut ui, store, key, &sender, &mut manager) {
                 Ok(true) => continue,
                 Ok(false) => {}
@@ -675,17 +766,19 @@ fn run_ui(
             && !ui.detail
             && !ui.offline
             && !ui.agent_view
+            && !ui.help
+            && ui.confirm_state.is_none()
             && ui.prompt.is_none()
             && ui.picker.is_none()
             && let Some(task) = ui
                 .selected(store)
-                .filter(|t| t["source"]["kind"] == "issue")
+                .filter(|t| matches!(string(&t["source"], "kind"), "issue" | "pr"))
                 .cloned()
         {
             let id = string(&task, "id").to_owned();
             let sender = sender.clone();
             std::thread::spawn(move || {
-                let _ = sender.send(Job::Reports(id, shared::agent_reports(&task)));
+                let _ = sender.send(Job::Reports(id, shared::comments(&task)));
             });
         }
         match actions::key(&mut ui, store, key, &sender) {

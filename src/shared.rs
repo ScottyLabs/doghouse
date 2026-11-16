@@ -233,7 +233,8 @@ pub(crate) fn update(task: &Value, field: &str, value: &str) -> Result<Value> {
         "stage" | "priority" => {
             let repo = string(task, "repo");
             if field == "stage" && value == "done" {
-                return write(&path, "PATCH", &json!({"state":"closed"}));
+                ensure!(task["source"]["state"] == "OPEN", "Issue is already closed");
+                return change_state(task);
             }
             let local = list(&format!("repos/{repo}/labels"), &[], 1000)?;
             let org = list("orgs/ScottyLabs/labels", &[], 1000)?;
@@ -334,15 +335,117 @@ pub(crate) fn publish_run(repository: &str, number: u64, body: &str) -> Result<V
         &json!({"body":body}),
     )
 }
-pub(crate) fn agent_reports(task: &Value) -> Result<Vec<Value>> {
-    let endpoint = endpoint(task)?;
-    let comments = list(&format!("{endpoint}/comments"), &[], 1000)?;
-    Ok(comments
-        .into_iter()
-        .filter(|comment| string(comment, "body").starts_with("<!-- shepherd-run:"))
-        .rev()
-        .take(10)
-        .collect())
+fn discussion(task: &Value) -> Result<(&str, &str, u64)> {
+    let kind = string(&task["source"], "kind");
+    ensure!(
+        matches!(kind, "issue" | "pr"),
+        "Choose a shared issue or PR; local tasks use m to change stage"
+    );
+    let repo = string(task, "repo");
+    ensure!(repo_valid(repo), "Invalid repository");
+    let number = task["source"]["number"]
+        .as_u64()
+        .filter(|number| *number > 0)
+        .context("Source has no number")?;
+    Ok((kind, repo, number))
+}
+fn native_write(task: &Value, operation: &str, body: Option<&str>) -> Result<Value> {
+    let (kind, repo, number) = discussion(task)?;
+    ensure!(
+        matches!(operation, "comment" | "close" | "reopen"),
+        "Unsupported Collar action"
+    );
+    let mut command = collar_command();
+    command.args([
+        "--host",
+        "https://git.cmu.dev",
+        "-R",
+        repo,
+        kind,
+        operation,
+        &number.to_string(),
+        "--json",
+    ]);
+    if body.is_some() {
+        command.args(["--body-file", "-"]);
+    }
+    let mut child = command
+        .stdin(if body.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Start Collar")?;
+    if let Some(body) = body {
+        let delivery = child
+            .stdin
+            .take()
+            .context("Collar stdin is unavailable")?
+            .write_all(body.as_bytes());
+        if let Err(error) = delivery {
+            let _ = child.wait();
+            return Err(error)
+                .context("Comment submission is uncertain; inspect GCD before sending again");
+        }
+    }
+    let output = child.wait_with_output()?;
+    ensure!(
+        output.status.success(),
+        "Collar action failed; inspect GCD before trying again: {}",
+        clean(&String::from_utf8_lossy(&output.stderr))
+    );
+    serde_json::from_slice(&output.stdout)
+        .context("Collar action may have completed; refresh GCD before trying again")
+}
+pub(crate) fn comment(task: &Value, body: &str) -> Result<Value> {
+    ensure!(
+        !body.trim().is_empty() && body.len() <= 20000,
+        "Comment must be 1-20000 bytes"
+    );
+    native_write(task, "comment", Some(body))
+}
+pub(crate) fn change_state(task: &Value) -> Result<Value> {
+    let (kind, repo, number) = discussion(task)?;
+    let state = string(&task["source"], "state");
+    ensure!(
+        matches!(state, "OPEN" | "CLOSED"),
+        "Merged PRs cannot be closed or reopened"
+    );
+    let path = format!(
+        "repos/{repo}/{}/{number}",
+        if kind == "pr" { "pulls" } else { "issues" }
+    );
+    let current = governance::api(&path, &[])?;
+    if kind == "issue" {
+        verify(&task["source"]["remote"], &current)?;
+    } else {
+        ensure!(
+            current["merged"] != true
+                && string(&current, "state").to_uppercase() == state
+                && current["title"] == task["title"]
+                && current["body"].as_str().unwrap_or("") == string(task, "body")
+                && current["head"]["sha"] == task["source"]["head"],
+            "PR changed on GCD; refresh and review it before changing its state"
+        );
+    }
+    let result = native_write(task, if state == "OPEN" { "close" } else { "reopen" }, None)?;
+    if kind == "issue" {
+        return governance::api(&path, &[]).map(|raw| normalize(&raw)).context("Issue state changed through Collar, but refreshing it failed. Inspect GCD before trying again");
+    }
+    Ok(result)
+}
+pub(crate) fn comments(task: &Value) -> Result<Vec<Value>> {
+    let (_, repository, number) = discussion(task)?;
+    let comments = list(
+        &format!("repos/{repository}/issues/{number}/comments"),
+        &[],
+        1000,
+    )?;
+    let start = comments.len().saturating_sub(30);
+    Ok(comments.into_iter().skip(start).collect())
 }
 #[cfg(test)]
 mod tests {

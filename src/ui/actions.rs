@@ -59,6 +59,19 @@ fn prompt(
             ui.query = value;
             ui.row = 0
         }
+        'C' => {
+            let (id, _) = ui
+                .edit_target
+                .clone()
+                .context("Choose a shared issue or PR")?;
+            let task = store
+                .tasks()
+                .iter()
+                .find(|task| task["id"] == id)
+                .cloned()
+                .context("Task is no longer cached")?;
+            ui.comment(task, value, sender)?;
+        }
         'e' | 'd' | 'o' | 'p' => edit(ui, store, mode, value, sender)?,
         'c' => {
             let project = local::add(store, PathBuf::from(value), None)?;
@@ -153,7 +166,32 @@ pub(super) fn key(
     sender: &Sender<Job>,
 ) -> Result<bool> {
     if ui.help {
-        ui.help = false;
+        let (width, height) = crossterm::terminal::size().unwrap_or((80, 24));
+        let limit = render::help::scroll_limit(ui, width, height);
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q' | '?') => ui.help = false,
+            KeyCode::Down | KeyCode::Char('j') => {
+                ui.help_scroll = ui.help_scroll.saturating_add(1).min(limit)
+            }
+            KeyCode::Up | KeyCode::Char('k') => ui.help_scroll = ui.help_scroll.saturating_sub(1),
+            KeyCode::PageDown => ui.help_scroll = ui.help_scroll.saturating_add(8).min(limit),
+            KeyCode::PageUp => ui.help_scroll = ui.help_scroll.saturating_sub(8),
+            KeyCode::Home => ui.help_scroll = 0,
+            _ => {}
+        }
+        return Ok(false);
+    }
+    if let Some(task) = ui.confirm_state.take() {
+        match key.code {
+            KeyCode::Enter => {
+                if let Err(error) = ui.change_state(task.clone(), sender) {
+                    ui.confirm_state = Some(task);
+                    return Err(error);
+                }
+            }
+            KeyCode::Esc => {}
+            _ => ui.confirm_state = Some(task),
+        }
         return Ok(false);
     }
     if let Some(mut picker) = ui.picker.take() {
@@ -253,7 +291,9 @@ pub(super) fn key(
                 }
                 retain = false;
             }
-            KeyCode::Enter if mode == 'd' && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Enter
+                if matches!(mode, 'd' | 'C') && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
                 chars.insert(ui.cursor, '\n');
                 ui.cursor += 1;
                 value = chars.iter().collect();
@@ -325,7 +365,29 @@ pub(super) fn key(
             ui.query.clear();
             ui.scroll = 0;
         }
-        KeyCode::Char('?') => ui.help = true,
+        KeyCode::Char('?') => {
+            ui.help = true;
+            ui.help_scroll = 0;
+        }
+        KeyCode::Char('C' | 'z') => {
+            ensure!(!ui.offline, "Offline mode cannot write to GCD");
+            ensure!(!ui.writing, "A GCD write is already running");
+            let task = selected(ui, store)?;
+            ensure!(
+                matches!(string(&task["source"], "kind"), "issue" | "pr"),
+                "Choose a shared issue or PR; use m for local task stages"
+            );
+            if key.code == KeyCode::Char('C') {
+                target(ui, &task)?;
+                ui.open_prompt('C', String::new());
+            } else {
+                ensure!(
+                    task["source"]["state"] != "MERGED",
+                    "A merged PR cannot be reopened"
+                );
+                ui.confirm_state = Some(task);
+            }
+        }
         KeyCode::Char('v') => ui.board = !ui.board,
         KeyCode::Char('w') => ui.open_picker(PickKind::Workspace),
         KeyCode::Char('P') => {
@@ -555,6 +617,44 @@ mod tests {
         assert!(ui.error_popup);
         assert!(ui.error);
         assert_eq!(ui.message, "Repository unavailable");
+        Ok(())
+    }
+    #[test]
+    fn close_requires_confirmation_and_can_be_cancelled_without_writing() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let mut store = Store::open(temporary.path().into())?;
+        governance::apply(
+            &mut store,
+            governance::from_records(governance::tests::records())?,
+        )?;
+        import_records(
+            &mut store,
+            "ScottyLabs/infrastructure",
+            &[json!({"number":1,"title":"Task","state":"OPEN"})],
+            &[],
+        )?;
+        let (sender, receiver) = mpsc::channel();
+        let mut ui = Ui {
+            source: 1,
+            ..Ui::default()
+        };
+        key(
+            &mut ui,
+            &mut store,
+            KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE),
+            &sender,
+        )?;
+        assert!(ui.confirm_state.is_some());
+        assert!(!ui.writing);
+        assert!(receiver.try_recv().is_err());
+        key(
+            &mut ui,
+            &mut store,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &sender,
+        )?;
+        assert!(ui.confirm_state.is_none());
+        assert!(receiver.try_recv().is_err());
         Ok(())
     }
     #[test]
