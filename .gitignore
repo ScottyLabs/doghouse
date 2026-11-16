@@ -1,0 +1,4 @@
+/target/
+/.shepherd/
+/.direnv/
+/.pre-commit-config.yaml
