@@ -389,6 +389,7 @@ pub(super) fn key(
             }
         }
         KeyCode::Char('v') => ui.board = !ui.board,
+        KeyCode::Char('u') => ui.toggle_work(store, sender)?,
         KeyCode::Char('w') => ui.open_picker(PickKind::Workspace),
         KeyCode::Char('P') => {
             ensure!(ui.workspace.is_some(), "Choose a workspace with w first");
@@ -547,7 +548,13 @@ pub(super) fn key(
             target(ui, &task)?;
             ui.moving = Some(ui.column)
         }
-        KeyCode::Char('s') => ui.start_sync(store, sender)?,
+        KeyCode::Char('s') => {
+            if ui.my_work {
+                ui.personal_refresh(sender)?;
+            } else {
+                ui.start_sync(store, sender)?;
+            }
+        }
         KeyCode::Char('O') => {
             let task = selected(ui, store)?;
             let repo = string(&task, "repo");

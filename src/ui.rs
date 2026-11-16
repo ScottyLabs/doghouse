@@ -25,6 +25,7 @@ enum Job {
     Reports(String, Result<Vec<Value>>),
     Commented(String, Result<Value>),
     StateChanged(String, String, Result<Value>),
+    Personal(Result<personal::Snapshot>),
 }
 fn refresh_failure(repository: &str, error: &anyhow::Error) -> String {
     let detail = format!("{error:#}");
@@ -58,6 +59,9 @@ pub(crate) struct Ui {
     help: bool,
     help_scroll: u16,
     confirm_state: Option<Value>,
+    my_work: bool,
+    personal_loading: bool,
+    browse_scope: Option<(Option<String>, Option<String>, usize)>,
     prompt: Option<(char, String)>,
     picker: Option<Picker>,
     message: String,
@@ -100,6 +104,57 @@ impl Ui {
                     })
             })
             .collect()
+    }
+    fn personal_refresh(&mut self, sender: &Sender<Job>) -> Result<()> {
+        ensure!(!self.offline, "Offline mode uses cached My work");
+        if self.personal_loading {
+            return Ok(());
+        }
+        self.personal_loading = true;
+        let sender = sender.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send(Job::Personal(personal::refresh()));
+        });
+        Ok(())
+    }
+    fn toggle_work(&mut self, store: &Store, sender: &Sender<Job>) -> Result<()> {
+        if !self.my_work && self.offline {
+            ensure!(
+                store.data["myWork"]["login"].is_string(),
+                "No cached account inbox; refresh online first"
+            );
+        }
+        self.my_work = !self.my_work;
+        if self.my_work {
+            self.browse_scope = Some((self.workspace.take(), self.project.take(), self.repo));
+            self.repo = 0;
+            self.source = 0;
+            self.board = false;
+            self.message = if self.offline {
+                "My work / cached assignments, PRs, and review requests"
+            } else {
+                "My work / refreshing your Collar inbox"
+            }
+            .into();
+            if !self.offline {
+                self.personal_refresh(sender)?;
+            } else {
+                ensure!(
+                    store.data["myWork"]["login"].is_string(),
+                    "No cached account inbox; refresh online first"
+                );
+            }
+        } else if let Some((workspace, project, repo)) = self.browse_scope.take() {
+            self.workspace = workspace;
+            self.project = project;
+            self.repo = repo;
+        }
+        self.agent_view = false;
+        self.row = 0;
+        self.scroll = 0;
+        self.query.clear();
+        self.detail = false;
+        Ok(())
     }
     fn local_task_visible(&self, store: &Store, task: &Value) -> bool {
         task["localProject"].as_str().is_some_and(|id| {
@@ -164,6 +219,14 @@ impl Ui {
             .tasks()
             .iter()
             .filter(|t| {
+                if self.my_work
+                    && (!store.data["myWork"]["roles"]
+                        .get(string(t, "id"))
+                        .is_some_and(|roles| roles.is_array())
+                        || t["stage"] == "done")
+                {
+                    return false;
+                }
                 let local = t["localProject"].is_string();
                 let draft = t["source"].is_null() && !local;
                 (if local {
@@ -207,7 +270,7 @@ impl Ui {
     fn selected<'a>(&self, store: &'a Store) -> Option<&'a Value> {
         self.visible(store)
             .into_iter()
-            .filter(|t| t["stage"] == STAGES[self.column])
+            .filter(|t| self.my_work || t["stage"] == STAGES[self.column])
             .nth(self.row)
     }
     fn focus(&mut self, store: &Store, repo: &str, number: &Value) {
@@ -222,7 +285,7 @@ impl Ui {
             self.row = self
                 .visible(store)
                 .iter()
-                .filter(|t| t["stage"] == STAGES[stage])
+                .filter(|t| self.my_work || t["stage"] == STAGES[stage])
                 .position(|t| t["id"] == task["id"])
                 .unwrap_or(0);
         }
@@ -231,7 +294,7 @@ impl Ui {
         let count = self
             .visible(store)
             .iter()
-            .filter(|t| t["stage"] == STAGES[self.column])
+            .filter(|t| self.my_work || t["stage"] == STAGES[self.column])
             .count();
         self.row = self.row.min(count.saturating_sub(1));
     }
@@ -518,6 +581,7 @@ fn run_ui(
         ui.message = "OFFLINE / cached Governance and GCD data".into();
     } else {
         ui.start_discovery(&sender)?;
+        ui.personal_refresh(&sender)?;
     }
     loop {
         if interrupted.load(std::sync::atomic::Ordering::Relaxed) {
@@ -646,6 +710,16 @@ fn run_ui(
                         if let Ok(task) = store.task_mut(&id) {
                             task["source"]["comments"] = json!(reports);
                             store.save()?;
+                        }
+                    }
+                    Job::Personal(result) => {
+                        ui.personal_loading = false;
+                        personal::apply(store, result?)?;
+                        if ui.my_work {
+                            ui.message = format!(
+                                "My work / signed in as {}",
+                                string(&store.data["myWork"], "login")
+                            );
                         }
                     }
                     Job::Commented(id, result) => {
@@ -909,6 +983,30 @@ mod tests {
                 .iter()
                 .all(|task| task["localProject"].is_null())
         );
+        Ok(())
+    }
+    #[test]
+    fn my_work_is_a_cross_project_inbox_across_stages() -> Result<()> {
+        let (_temporary, mut store) = fixture()?;
+        let ids = store
+            .tasks()
+            .iter()
+            .map(|task| string(task, "id").to_owned())
+            .collect::<Vec<_>>();
+        let mut roles = serde_json::Map::new();
+        for id in &ids {
+            roles.insert(id.clone(), json!(["Assigned issue"]));
+        }
+        store.data["myWork"] = json!({"login":"fixture","roles":roles});
+        let ui = Ui {
+            my_work: true,
+            source: 0,
+            ..Ui::default()
+        };
+        assert_eq!(ui.visible(&store).len(), ids.len());
+        assert!(ui.selected(&store).is_some());
+        store.task_mut(&ids[0])?["stage"] = json!("done");
+        assert_eq!(ui.visible(&store).len(), ids.len() - 1);
         Ok(())
     }
     #[test]

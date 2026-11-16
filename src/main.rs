@@ -20,6 +20,7 @@ use std::{
 mod agents;
 mod governance;
 mod local;
+mod personal;
 mod shared;
 
 const STAGES: [&str; 5] = ["backlog", "ready", "in-progress", "review", "done"];
@@ -46,6 +47,8 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Action {
+    /// Refresh your assignments, PRs, reviews, and account repositories through Collar.
+    Inbox,
     /// Manage directory projects stored only on this machine.
     Local {
         #[command(subcommand)]
@@ -649,6 +652,14 @@ fn main() -> Result<()> {
                 println!("{id}");
             }
         },
+        Some(Action::Inbox) => {
+            ensure!(!cli.offline, "Inbox refresh requires online access");
+            personal::apply(&mut store, personal::refresh()?)?;
+            println!(
+                "{}",
+                json!({"login":store.data["myWork"]["login"],"items":store.data["myWork"]["roles"].as_object().map(|roles|roles.len()).unwrap_or(0),"accountRepositories":store.data["accountRepositories"].as_array().map(|repos|repos.len()).unwrap_or(0)})
+            );
+        }
         Some(Action::Discover) => {
             ensure!(!cli.offline, "Discovery requires online access");
             governance::apply(&mut store, governance::discover()?)?;

@@ -341,6 +341,7 @@ pub(super) fn key(
             ui.run_scroll = 0;
         }
         KeyCode::Char('t') => {
+            ui.my_work = false;
             let run = selected_run(ui, store)?;
             let task = store
                 .tasks()

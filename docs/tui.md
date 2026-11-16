@@ -16,6 +16,7 @@ The list keeps task details beside the selection when the terminal is wide enoug
 | 1-5 | Jump to a stage |
 | Enter / Esc | Expand detail / return |
 | Page Up / Page Down | Scroll detail or page tasks |
+| u | Switch All accessible / My work |
 | w / P / r | Workspace / project / repository picker |
 | Tab / Shift+Tab | Next / previous scoped repository |
 | / | Live search; Enter keeps it, Esc restores the previous search |
@@ -26,8 +27,8 @@ The list keeps task details beside the selection when the terminal is wide enoug
 | o | Set GCD assignees using comma-separated logins |
 | p | Set shared priority through existing labels |
 | m | Change shared stage; Done closes the issue on GCD |
-| C | Write a comment through Collar; Ctrl+S posts |
-| z | Close/reopen an issue or unmerged PR through Collar; Enter confirms |
+| C | Write a multiline issue or PR comment through Collar; Ctrl+S posts |
+| z | Close or reopen an issue or unmerged PR through Collar; Enter confirms |
 | O | Open the issue or PR in the browser |
 | s | Refresh current scope from GCD |
 | g / G | Refresh Governance / open its declaration |
@@ -36,7 +37,7 @@ The list keeps task details beside the selection when the terminal is wide enoug
 | a / A | Agents view / launch Codex or Claude Code for the selected task |
 | ? / q | Show actions / quit |
 
-Editors support Left, Right, Home, End, Delete, and Backspace. Enter saves titles, assignees, and priorities. In descriptions, Enter inserts a newline and Ctrl+S saves. The dialog identifies the remote write. Edits compare the inspected remote issue with its current state before sending; stale edits fail. Writes are never retried automatically. If a response is uncertain, inspect the issue on GCD before trying again. Ordinary quit waits for a pending write; Ctrl+C force-exits and its remote write may already have completed.
+Editors support Left, Right, Home, End, Delete, and Backspace. Enter saves titles, assignees, and priorities. In descriptions and comments, Enter inserts a newline; Ctrl+S saves or posts. Comments use `collar issue comment` or `collar pr comment` with literal stdin. Close/reopen uses the corresponding typed Collar command. Closing a PR does not merge it; merged PRs cannot be reopened. The dialog identifies the remote write. Edits compare the inspected remote issue with its current state before sending; stale edits fail. Writes are never retried automatically. If a response is uncertain, inspect the issue on GCD before trying again. Ordinary quit waits for a pending write; Ctrl+C force-exits and its remote write may already have completed.
 
 Stages follow repository labels such as `stage/ready`, `stage/in-progress`, and `stage/in progress`. Closed/merged resources are Done. Without a stage label, assigned issues appear active and issues with a directly closing open PR appear in review. Repositories without the requested shared workflow label show an actionable error instead of saving a misleading local override. Priority honors existing `priority/*` and `urgency/*` labels. Shepherd does not provision labels or change Governance settings.
 
@@ -66,6 +67,12 @@ shepherd --workspace @local --project LOCAL_PROJECT_ID
 shepherd local remove LOCAL_PROJECT_ID
 ```
 
-The grouped keyboard guide uses two columns in wide terminals. Arrows and Page Up/Down scroll; Esc closes it.
+## Personal work and accessible projects
 
-Agent launch starts at the goal. Press Enter to start, Tab to change the inferred settings, or Esc to cancel. Applicable project instructions are loaded before the agent outlines, implements, and checks its work.
+The header exposes **All accessible** and **My work**. Press `u` to switch. All accessible preserves the project browser: canonical Governance teams, registered local projects, and account repositories outside Governance under Other accessible repositories. Account discovery uses Collar's authenticated API; it does not provision shared projects.
+
+My work is a single inbox across projects and stages. It includes open issues assigned to the signed-in account, assigned PRs, authored PRs, and requested reviews. Each item shows why it is in the inbox; items in multiple categories appear once. The account is read through Collar, never inferred from the machine username. `s` refreshes this inbox; `f` filters its source types. Offline mode uses the cached identity and assignments and labels the data as cached.
+
+`shepherd inbox` refreshes the same account data without opening the TUI. API reads paginate to completion; failures preserve the previous account snapshot and remain visible. Expanded task detail reads discussion comments through Collar. Ordinary refreshes preserve cached comments.
+
+The keyboard guide groups navigation, task, Collar, agent, and local actions. It uses two columns in wide terminals and one in narrow terminals; arrows and Page Up/Down scroll, and Esc closes it.

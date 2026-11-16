@@ -20,7 +20,7 @@ fn collect_pages(
     }
     bail!("Pagination did not terminate")
 }
-fn list(path: &str, fields: &[(&str, &str)], maximum: usize) -> Result<Vec<Value>> {
+pub(crate) fn list(path: &str, fields: &[(&str, &str)], maximum: usize) -> Result<Vec<Value>> {
     collect_pages(
         |page| {
             let page = page.to_string();

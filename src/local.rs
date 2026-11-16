@@ -18,6 +18,7 @@ pub(crate) fn catalog(
     mut catalog: governance::Catalog,
     data: &Value,
 ) -> Result<governance::Catalog> {
+    catalog = personal::catalog(catalog, data)?;
     let projects = projects(data)?;
     if !projects.is_empty() {
         catalog.workspaces.push(governance::Workspace {

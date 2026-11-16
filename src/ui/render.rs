@@ -284,9 +284,10 @@ fn detail_lines(task: &Value, store: &Store) -> Vec<Line<'static>> {
         for report in reports {
             lines.push(Line::from(label(
                 report["user"]["login"]
-                        .as_str()
-                        .or_else(|| report["author"]["login"].as_str())
-                        .unwrap_or("Unknown author").to_string(),
+                    .as_str()
+                    .or_else(|| report["author"]["login"].as_str())
+                    .unwrap_or("Unknown author")
+                    .to_string(),
                 BLUE,
             )));
             let body = string(report, "body");
@@ -353,11 +354,19 @@ fn task_list(ui: &Ui, f: &mut ratatui::Frame, store: &Store, area: Rect) {
     let items: Vec<_> = ui
         .visible(store)
         .into_iter()
-        .filter(|t| t["stage"] == STAGES[ui.column])
+        .filter(|t| ui.my_work || t["stage"] == STAGES[ui.column])
         .collect();
-    let title = format!("{} / {} tasks", NAMES[ui.column], items.len());
+    let title = format!(
+        "{} / {} tasks",
+        if ui.my_work {
+            "My work"
+        } else {
+            NAMES[ui.column]
+        },
+        items.len()
+    );
     if items.is_empty() {
-        f.render_widget(Paragraph::new(if ui.local_scope(){"\n No local tasks in this view.\n\n n  Add a task\n c  Add a directory\n P  Choose a local project"}else if ui.repos(store).is_empty(){"\n No repositories declared in this project.\n\n P  Choose a project\n G  Open Governance declaration"}else{"\n No tasks in this view.\n\n n  Create a GCD issue\n s  Refresh shared tasks\n h/l  Browse stages\n Esc  Clear search"}).style(style(MUTED)).block(block(title,true).padding(Padding::horizontal(1))),area);
+        f.render_widget(Paragraph::new(if ui.my_work {if ui.personal_loading {"\n Reading your assignments, PRs, and review requests through Collar..."} else {"\n No items in this My work view.\n\n s  Refresh your account inbox\n f  Change source filter\n u  All accessible projects"}} else if ui.local_scope(){"\n No local tasks in this view.\n\n n  Add a task\n c  Add a directory\n P  Choose a local project"}else if ui.repos(store).is_empty(){"\n No repositories declared in this project.\n\n P  Choose a project\n G  Open Governance declaration"}else{"\n No tasks in this view.\n\n n  Create a GCD issue\n s  Refresh shared tasks\n h/l  Browse stages\n Esc  Clear search"}).style(style(MUTED)).block(block(title,true).padding(Padding::horizontal(1))),area);
         return;
     }
     let rows: Vec<ListItem> = items
@@ -379,6 +388,21 @@ fn task_list(ui: &Ui, f: &mut ratatui::Frame, store: &Store, area: Rect) {
             ];
             if !string(t, "owner").is_empty() {
                 meta.push(label(format!("  @{}", clean(string(t, "owner"))), GREEN))
+            }
+            if ui.my_work
+                && let Some(roles) = store.data["myWork"]["roles"][string(t, "id")].as_array()
+            {
+                meta.push(label(
+                    format!(
+                        "  {}",
+                        roles
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(" / ")
+                    ),
+                    BLUE,
+                ));
             }
             if let Some(todos) = t["source"]["todos"]
                 .as_array()
@@ -566,8 +590,31 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
         Paragraph::new(vec![
             Line::from(vec![
                 Span::styled("SHEPHERD", style(BLUE).add_modifier(Modifier::BOLD)),
+                Span::raw("   "),
+                Span::styled(
+                    "All accessible",
+                    if !ui.my_work {
+                        style(BLUE).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                    } else {
+                        style(MUTED)
+                    },
+                ),
+                Span::raw("   "),
+                Span::styled(
+                    "My work",
+                    if ui.my_work {
+                        style(BLUE).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                    } else {
+                        style(MUTED)
+                    },
+                ),
+                label("  [u]  /  ", MUTED),
                 label(
-                    format!("  /  {}  /  {}", clean(repo), clean(ui.project_name(store))),
+                    if ui.my_work {
+                        format!("@{}", string(&store.data["myWork"], "login"))
+                    } else {
+                        format!("{} / {}", clean(repo), clean(ui.project_name(store)))
+                    },
                     TEXT,
                 ),
             ]),
@@ -585,7 +632,14 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
                             }
                         )
                     } else {
-                        format!("{open} open  ·  {source}")
+                        format!(
+                            "{open} open / {source}{}",
+                            if ui.personal_loading {
+                                " / account refreshing"
+                            } else {
+                                ""
+                            }
+                        )
                     },
                     MUTED,
                 ),
@@ -646,6 +700,28 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
                     } else {
                         MUTED
                     },
+                ),
+            ]))
+            .block(
+                Block::default()
+                    .borders(Borders::BOTTOM)
+                    .border_style(style(EDGE)),
+            ),
+            regions[1],
+        );
+    } else if ui.my_work {
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                label("MY WORK", BLUE),
+                label("  Assignments / your PRs / review requests    ", MUTED),
+                label("u  All accessible", TEXT),
+                label(
+                    if ui.personal_loading {
+                        " / refreshing"
+                    } else {
+                        ""
+                    },
+                    AMBER,
                 ),
             ]))
             .block(
@@ -728,10 +804,18 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
                     .tasks()
                     .iter()
                     .filter(|t| {
-                        ((project.repositories.iter().any(|r| t["repo"] == *r)
-                            && t["source"]["kind"] == "issue")
-                            || (team.slug == local::WORKSPACE && t["localProject"] == project.slug))
+                        let local =
+                            team.slug == local::WORKSPACE && t["localProject"] == project.slug;
+                        (project
+                            .repositories
+                            .iter()
+                            .any(|repository| t["repo"] == *repository)
+                            || local)
                             && t["stage"] != "done"
+                            && (ui.source == 0
+                                || (ui.source == 1 && (t["source"]["kind"] == "issue" || local))
+                                || (ui.source == 2 && t["source"]["kind"] == "pr")
+                                || (ui.source == 3 && t["source"].is_null() && !local))
                     })
                     .count();
                 lines.push(Line::styled(
@@ -1105,20 +1189,21 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
         let mut text = vec![Line::from(label(hint, MUTED)), Line::raw("")];
         if *mode == 'C'
             && let Some((id, _)) = &ui.edit_target
-                && let Some(task) = store.tasks().iter().find(|task| task["id"] == *id) {
-                    text.insert(
-                        0,
-                        Line::from(label(
-                            format!(
-                                "{} / {} / {}",
-                                string(task, "repo"),
-                                reference(task),
-                                string(task, "title")
-                            ),
-                            BLUE,
-                        )),
-                    );
-                }
+            && let Some(task) = store.tasks().iter().find(|task| task["id"] == *id)
+        {
+            text.insert(
+                0,
+                Line::from(label(
+                    format!(
+                        "{} / {} / {}",
+                        string(task, "repo"),
+                        reference(task),
+                        string(task, "title")
+                    ),
+                    BLUE,
+                )),
+            );
+        }
         if *mode == 'c' {
             text.insert(
                 0,

@@ -98,7 +98,7 @@ fn contents(ui: &Ui) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
             "START",
             &[
                 ("A / n", "Run an agent for a task"),
-                ("Ctrl+S", "Start from the launch dialog"),
+                ("Enter", "Start from the launch dialog"),
                 ("Tab", "Change launch settings"),
             ],
         );
@@ -179,6 +179,7 @@ fn contents(ui: &Ui) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
             &mut right,
             "WORKSPACE",
             &[
+                ("u", "All accessible / My work"),
                 ("w", "Choose workspace"),
                 ("P", "Choose project"),
                 ("r / Tab", "Choose / cycle repositories"),
