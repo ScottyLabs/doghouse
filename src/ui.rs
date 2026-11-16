@@ -603,14 +603,14 @@ fn run_ui(
         if let Some(id) = ui.handoff.clone()
             && manager
                 .get(&id)
-                .is_ok_and(|run| !run.state.active() || manager.is_suspended(&id))
+                .is_ok_and(|run| !run.state.active() || manager.is_detached(&id))
         {
             ui.handoff = None;
             FileExt::unlock(&store._lock)?;
             let _ = crossterm::execute!(io::stdout(), event::DisableBracketedPaste);
             ratatui::restore();
             println!(
-                "Opening the native conversation. Ctrl+Z returns to Shepherd; exit the CLI to close it."
+                "Opening the native conversation. Ctrl+Z returns to Shepherd while work continues."
             );
             let result = manager.interact(&id, &interrupted);
             FileExt::lock_exclusive(&store._lock)?;
@@ -621,8 +621,8 @@ fn run_ui(
             ui.error = result.is_err();
             ui.message = match result {
                 Ok(()) => {
-                    if manager.is_suspended(&id) {
-                        "Conversation paused / Enter resumes / s stops / v last automated result"
+                    if manager.is_detached(&id) {
+                        "Working in background / Enter returns / s stops / v last automated result"
                             .into()
                     } else {
                         "Returned from the native conversation / Enter opens it again / v last automated result".into()

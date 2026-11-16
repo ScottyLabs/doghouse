@@ -42,7 +42,10 @@
           scottylabs = {
             project.name = "shepherd";
             rust.enable = true;
-            shell.packages = [ collar ];
+            shell.packages = [
+              collar
+              pkgs.tmux
+            ];
             shell.scripts.shepherd = ''
               export SHEPHERD_COLLAR="${collar}/bin/collar"
               cd "$SCOTTYLABS_ROOT"
@@ -53,7 +56,9 @@
             src = ./.;
             nativeBuildInputs = [ pkgs.makeWrapper ];
             buildArgs.postInstall = ''
-              wrapProgram $out/bin/shepherd --set-default SHEPHERD_COLLAR ${collar}/bin/collar
+              wrapProgram $out/bin/shepherd --set-default SHEPHERD_COLLAR ${collar}/bin/collar --prefix PATH : ${
+                pkgs.lib.makeBinPath [ pkgs.tmux ]
+              }
             '';
           };
         };

@@ -468,7 +468,7 @@ pub(super) fn key(
                 run.state != crate::agents::State::Unattached,
                 "Open this active conversation from its owning Shepherd window"
             );
-            if run.state.active() && !manager.is_suspended(&run.id) {
+            if run.state.active() && !manager.is_detached(&run.id) {
                 ui.take_over = Some(run.id);
             } else {
                 ui.handoff = Some(run.id);

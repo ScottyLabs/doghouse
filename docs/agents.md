@@ -29,11 +29,11 @@ Shepherd invokes the installed native CLI with its existing login and model conf
 | t / O | Return to the task / open its GCD issue |
 | a / Esc | Return to tasks |
 
-Enter takes you into the real native CLI in the same terminal. Ctrl+Z suspends that CLI and returns to Shepherd; Enter resumes the same process, including its in-memory draft. Exiting the CLI also returns to Shepherd. Other background agents continue being polled. Opening a still-running automated turn first asks to stop that turn and take over its session. The owning Shepherd window retains the checkout and task locks while a native session is suspended; `s` stops it.
+Enter takes you into the real native CLI in the same terminal. Ctrl+Z detaches from the CLI and returns to Shepherd while the agent keeps working. Enter reattaches to the same process, including its in-memory draft. A private tmux terminal preserves the screen and runs independently of the visible conversation; packaged Shepherd includes tmux. Exiting the CLI also returns to Shepherd. Other background agents continue being polled. Opening a still-running automated turn first asks to stop that turn and take over its session. The owning Shepherd window retains the checkout and task locks while a native session is detached; `s` stops it.
 
 After an interactive conversation, the saved automated result is labeled as historical and cannot be published as a fresh result. An automated follow-up with `r` can produce a new publishable result. Native session history remains available through Enter.
 
-Delete removes only Shepherd's run record and transcript. It requires confirmation, blocks active/suspended runs and pending publication, and retains project files, worktrees, native session history, and GCD comments. `x` separately removes a clean worktree.
+Delete removes only Shepherd's run record and transcript. It requires confirmation, blocks active/detached runs and pending publication, and retains project files, worktrees, native session history, and GCD comments. `x` separately removes a clean worktree.
 
 Up to four runs can execute in one window. Local ownership locks prevent another Shepherd window from using the same task or checkout concurrently. Resume retains the original checkout and native session. A changed HEAD must be preserved before starting a new run. Cleanup refuses dirty worktrees or worktrees containing new commits. Stopping a run keeps its changes and result.
 

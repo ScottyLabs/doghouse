@@ -79,7 +79,7 @@ The keyboard guide groups navigation, task, Collar, agent, and local actions. It
 
 ## Conversation and preview controls
 
-In Agents, Enter opens the native conversation, Ctrl+Z returns from that CLI to Shepherd, and Enter resumes it. `v` shows activity or the last automated result, `d` shows the diff, and Delete (or `D`) confirms history deletion. Active and suspended runs must be stopped with `s` before deletion.
+In Agents, Enter opens the native conversation, Ctrl+Z returns from that CLI to Shepherd while work continues, and Enter reattaches to the same terminal. `v` shows activity or the last automated result, `d` shows the diff, and Delete (or `D`) confirms history deletion. Active and detached runs must be stopped with `s` before deletion.
 
 Task descriptions, discussion comments, and automated results render CommonMark structure: headings, emphasis, inline/fenced code, nested lists, checkboxes, quotes, links, and tables. Hidden HTML comments stay hidden; editing still uses the original Markdown source. Tables fit the preview width, with long cells shortened visibly. Colors follow the terminal palette.
 

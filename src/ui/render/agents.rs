@@ -6,6 +6,7 @@ fn state_color(state: State) -> Color {
         State::Completed => GREEN,
         State::Continued => BLUE,
         State::Suspended => AMBER,
+        State::Detached => BLUE,
         State::Stopping | State::Attention => AMBER,
         State::Failed => Color::Red,
         State::Stopped | State::Unattached => MUTED,

@@ -76,6 +76,7 @@ pub(crate) enum State {
     Completed,
     Continued,
     Suspended,
+    Detached,
     Failed,
     Stopped,
     Attention,
@@ -88,7 +89,8 @@ impl State {
             Self::Stopping => "Stopping",
             Self::Completed => "Ready to review",
             Self::Continued => "Continued in CLI",
-            Self::Suspended => "Conversation paused",
+            Self::Suspended => "Conversation paused (older session)",
+            Self::Detached => "Working in background",
             Self::Failed => "Failed",
             Self::Stopped => "Stopped",
             Self::Attention => "Needs attention",
@@ -96,7 +98,10 @@ impl State {
         }
     }
     pub fn active(self) -> bool {
-        matches!(self, Self::Running | Self::Stopping | Self::Suspended)
+        matches!(
+            self,
+            Self::Running | Self::Stopping | Self::Suspended | Self::Detached
+        )
     }
 }
 #[derive(Clone, Deserialize, Serialize)]
@@ -250,7 +255,7 @@ pub(crate) struct Manager {
     executables: [OsString; 2],
     refreshed_at: Instant,
     interactive: Option<String>,
-    suspended: BTreeMap<String, interactive::Suspended>,
+    consoles: BTreeMap<String, interactive::Console>,
     terminal_reset: bool,
 }
 fn find_executable(name: &OsStr) -> Option<PathBuf> {
@@ -438,7 +443,7 @@ impl Manager {
             executables: [Provider::Codex.executable(), Provider::Claude.executable()],
             refreshed_at: Instant::now(),
             interactive: None,
-            suspended: BTreeMap::new(),
+            consoles: BTreeMap::new(),
             terminal_reset: false,
         })
     }
@@ -448,7 +453,7 @@ impl Manager {
         runs
     }
     pub fn active_count(&self) -> usize {
-        self.active.len() + self.suspended.len() + usize::from(self.interactive.is_some())
+        self.active.len() + self.consoles.len()
     }
     pub fn get(&self, id: &str) -> Result<&Run> {
         self.runs.get(id).context("Agent run not found")
@@ -789,7 +794,7 @@ impl Manager {
                 continue;
             };
             if self.active.contains_key(id)
-                || self.suspended.contains_key(id)
+                || self.consoles.contains_key(id)
                 || self.interactive.as_deref() == Some(id)
             {
                 continue;
@@ -812,6 +817,7 @@ impl Manager {
     }
     pub fn poll(&mut self) -> Result<()> {
         if self.refreshed_at.elapsed() > Duration::from_secs(1) {
+            self.poll_consoles()?;
             self.refresh_external()?;
         }
         let mut dirty = std::collections::BTreeSet::new();
@@ -920,8 +926,12 @@ impl Manager {
         std::mem::take(&mut self.terminal_reset)
     }
     pub fn stop(&mut self, id: &str) -> Result<()> {
-        if let Some(session) = self.suspended.remove(id) {
-            self.active.insert(id.into(), session.into_active()?);
+        if let Some(session) = self.consoles.remove(id) {
+            drop(session);
+            let run = self.runs.get_mut(id).context("Run disappeared")?;
+            run.state = State::Stopped;
+            run.event("Stopped", "Native terminal stopped");
+            return self.persist(id);
         }
         let active = self
             .active
@@ -1187,15 +1197,12 @@ fn stream(
 }
 impl Drop for Manager {
     fn drop(&mut self) {
-        let suspended = self.suspended.keys().cloned().collect::<Vec<_>>();
-        self.suspended.clear();
-        for id in suspended {
+        let consoles = self.consoles.keys().cloned().collect::<Vec<_>>();
+        self.consoles.clear();
+        for id in consoles {
             if let Some(run) = self.runs.get_mut(&id) {
                 run.state = State::Stopped;
-                run.event(
-                    "Stopped",
-                    "Controller closed; paused native process stopped",
-                );
+                run.event("Stopped", "Controller closed; native terminal stopped");
             }
             let _ = self.persist(&id);
         }
