@@ -926,7 +926,7 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
                 status,
                 if ui.error { Color::LightRed } else { MUTED },
             )),
-            if ui.agent_view {Line::from(label("a Tasks / A Launch / r Resume / s Stop / Enter Result / d Diff / P Publish / ? Help",BLUE))}else{
+            if ui.agent_view {Line::from(label("a Tasks / A Launch / r Resume / s Stop / Enter Result / d Diff / Delete Run / P Publish / ? Help",BLUE))}else{
             Line::from(vec![
                 label("n", BLUE),
                 label(if ui.local_scope() { " task  " } else { " GCD issue  " }, TEXT),

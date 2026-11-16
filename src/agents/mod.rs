@@ -387,7 +387,7 @@ impl Manager {
             .map(|entry| entry.map(|entry| entry.path()))
             .collect::<io::Result<Vec<_>>>()?
             .into_iter()
-            .filter(|path| path.is_dir())
+            .filter(|path| path.join("run.json").is_file())
             .collect::<Vec<_>>();
         paths.sort();
         for path in paths.into_iter().rev().take(200) {
@@ -752,6 +752,9 @@ impl Manager {
         Ok(())
     }
     fn refresh_external(&mut self) -> Result<()> {
+        self.runs.retain(|id, _| {
+            self.active.contains_key(id) || self.root.join(id).join("run.json").is_file()
+        });
         let mut paths = fs::read_dir(&self.root)?
             .map(|entry| entry.map(|e| e.path()))
             .collect::<io::Result<Vec<_>>>()?;
@@ -768,7 +771,11 @@ impl Manager {
             if self.active.contains_key(id) {
                 continue;
             }
-            let mut run = self.read_record(id)?;
+            let mut run = match self.read_record(id) {
+                Ok(run) => run,
+                Err(_) if !path.join("run.json").exists() => continue,
+                Err(error) => return Err(error),
+            };
             if run.state.active() {
                 run.state = State::Unattached;
             }
@@ -924,6 +931,7 @@ impl Manager {
     pub fn cleanup(&mut self, id: &str) -> Result<()> {
         let run = self.read_record(id)?;
         let _lease = lease(&self.root, &format!("checkout:{}", run.directory.display()))?;
+        let run = self.read_record(id)?;
         ensure!(
             git_text(&run.directory, &["rev-parse", "HEAD"])?.trim() == run.base_commit,
             "Checkout has new commits; preserve them before removing it"
@@ -956,6 +964,35 @@ impl Manager {
             "Removed clean isolated checkout; logs and result retained",
         );
         self.persist(id)
+    }
+    pub fn delete(&mut self, id: &str) -> Result<()> {
+        let run = self.read_record(id)?;
+        ensure!(
+            !self.active.contains_key(id) && !run.state.active() && run.state != State::Unattached,
+            "Stop this agent in its owning window and wait for it to finish before deleting its history"
+        );
+        let _checkout = lease(&self.root, &format!("checkout:{}", run.directory.display()))?;
+        let _publication = lease(&self.root, &format!("publish:{id}"))?;
+        let run = self.read_record(id)?;
+        ensure!(
+            !run.state.active() && run.state != State::Unattached,
+            "This run is still active"
+        );
+        ensure!(
+            run.publication != "publishing",
+            "Wait for result publication to finish before deleting history"
+        );
+        let directory = self.root.join(id);
+        match fs::remove_file(directory.join("output.log")) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("Delete run transcript"),
+        }
+        fs::remove_file(directory.join("run.json")).context("Delete run history")?;
+        self.runs.remove(id);
+        // Never remove checkout contents, native CLI sessions, or shared comments.
+        let _ = fs::remove_dir(directory);
+        Ok(())
     }
     pub fn publication_body(&self, id: &str) -> Result<String> {
         let run = self.get(id)?;
@@ -1453,6 +1490,86 @@ mod tests {
         assert!(prompt.contains("Run cargo test --locked."));
         assert!(prompt.contains("State a short implementation outline"));
         assert!(!source.join("received-prompt").exists());
+        Ok(())
+    }
+    #[test]
+    fn deleting_run_history_keeps_dirty_worktrees_and_updates_other_windows() -> Result<()> {
+        let (temporary, mut manager, source) =
+            setup(&format!("printf 'keep me\\n' > new.txt\n{CODEX}"))?;
+        let id = manager.start(
+            &task(),
+            Provider::Codex,
+            Mode::Implement,
+            source,
+            "Implement".into(),
+        )?;
+        finished(&mut manager)?;
+        let checkout = manager.get(&id)?.directory.clone();
+        let mut other = Manager::open(&temporary.path().join("cache"))?;
+        manager.delete(&id)?;
+        assert_eq!(fs::read_to_string(checkout.join("new.txt"))?, "keep me\n");
+        assert!(!manager.root.join(&id).join("run.json").exists());
+        assert!(!manager.root.join(&id).join("output.log").exists());
+        other.refresh_external()?;
+        assert!(other.get(&id).is_err());
+        assert!(other.cleanup(&id).is_err());
+        assert!(!manager.root.join(&id).join("run.json").exists());
+        Ok(())
+    }
+    #[test]
+    fn active_runs_cannot_be_deleted_from_either_window() -> Result<()> {
+        let (temporary, mut manager, source) = setup("sleep 30\n")?;
+        let id = manager.start(
+            &task(),
+            Provider::Codex,
+            Mode::Plan,
+            source,
+            "Inspect".into(),
+        )?;
+        let mut other = Manager::open(&temporary.path().join("cache"))?;
+        assert!(manager.delete(&id).is_err());
+        assert!(other.delete(&id).is_err());
+        manager.stop(&id)?;
+        finished(&mut manager)?;
+        other.delete(&id)?;
+        manager.refresh_external()?;
+        assert!(manager.get(&id).is_err());
+        Ok(())
+    }
+    #[test]
+    fn pending_publication_blocks_history_deletion() -> Result<()> {
+        let (_temporary, mut manager, source) = setup(CODEX)?;
+        let id = manager.start(
+            &task(),
+            Provider::Codex,
+            Mode::Plan,
+            source,
+            "Inspect".into(),
+        )?;
+        finished(&mut manager)?;
+        manager.begin_publication(&id)?;
+        assert!(manager.delete(&id).is_err());
+        manager.set_publication(&id, "published")?;
+        manager.delete(&id)?;
+        assert!(manager.get(&id).is_err());
+        Ok(())
+    }
+    #[test]
+    fn retained_directories_do_not_hide_older_run_records() -> Result<()> {
+        let (temporary, mut manager, source) = setup(CODEX)?;
+        let id = manager.start(
+            &task(),
+            Provider::Codex,
+            Mode::Plan,
+            source,
+            "Inspect".into(),
+        )?;
+        finished(&mut manager)?;
+        for index in 0..205 {
+            fs::create_dir(manager.root.join(format!("z-retained-{index:04}")))?;
+        }
+        let reopened = Manager::open(&temporary.path().join("cache"))?;
+        assert!(reopened.get(&id).is_ok());
         Ok(())
     }
     #[test]

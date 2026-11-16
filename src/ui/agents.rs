@@ -114,6 +114,23 @@ pub(super) fn key(
     sender: &Sender<Job>,
     manager: &mut Manager,
 ) -> Result<bool> {
+    if let Some(id) = ui.delete_run.clone() {
+        match key.code {
+            KeyCode::Esc => ui.delete_run = None,
+            KeyCode::Enter => {
+                manager.delete(&id)?;
+                ui.delete_run = None;
+                ui.runs = manager.snapshots();
+                ui.run_row = ui
+                    .run_row
+                    .min(ui.visible_runs(store).len().saturating_sub(1));
+                ui.run_scroll = 0;
+                ui.message="Deleted run history and transcript. Checkouts, native sessions, and GCD comments are retained.".into();
+            }
+            _ => {}
+        }
+        return Ok(true);
+    }
     if let Some(id) = ui.publish_run.clone() {
         match key.code {
             KeyCode::Esc => ui.publish_run = None,
@@ -421,6 +438,14 @@ pub(super) fn key(
             let run = selected_run(ui, store)?;
             ui.agent_diff = Some(manager.diff(&run.id)?);
             ui.run_scroll = 0;
+        }
+        KeyCode::Delete | KeyCode::Char('D') => {
+            let run = selected_run(ui, store)?;
+            ensure!(
+                !run.state.active() && run.state != crate::agents::State::Unattached,
+                "Stop the agent in its owning window before deleting its run history"
+            );
+            ui.delete_run = Some(run.id);
         }
         KeyCode::Char('x') => {
             let run = selected_run(ui, store)?;

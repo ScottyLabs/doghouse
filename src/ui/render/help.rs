@@ -120,6 +120,7 @@ fn contents(ui: &Ui) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
                 ("d", "Review changes"),
                 ("P", "Review a result comment for GCD"),
                 ("x", "Remove a clean worktree"),
+                ("Delete / D", "Delete finished run history"),
                 ("t", "Return to the original task"),
                 ("O", "Open source on GCD"),
             ],

@@ -402,6 +402,39 @@ pub(super) fn overlays(ui: &Ui, f: &mut ratatui::Frame) {
             regions[4],
         );
     }
+    if let Some(id) = &ui.delete_run
+        && let Some(run) = ui.runs.iter().find(|run| run.id == *id)
+    {
+        let rect = popup(area, 82, 16);
+        f.render_widget(Clear, rect);
+        f.render_widget(
+            Paragraph::new(vec![
+                Line::styled(
+                    clean(&run.task_title),
+                    style(TEXT).add_modifier(Modifier::BOLD),
+                ),
+                Line::from(label(
+                    format!("{} / {}", run.provider.name(), run.state.name()),
+                    MUTED,
+                )),
+                Line::raw(""),
+                Line::raw("Delete this run's Shepherd history and transcript?"),
+                Line::raw(
+                    "Project files, worktrees, native CLI sessions, and GCD comments are kept.",
+                ),
+                Line::raw(""),
+                Line::from(label(
+                    format!("Checkout kept at {}", run.directory.display()),
+                    MUTED,
+                )),
+                Line::raw(""),
+                Line::from(label("Enter delete run / Esc cancel", BLUE)),
+            ])
+            .wrap(Wrap { trim: false })
+            .block(block("Delete agent run", true).padding(Padding::new(2, 1, 1, 0))),
+            rect,
+        );
+    }
     if let Some(id) = &ui.publish_run
         && let Some(run) = ui.runs.iter().find(|r| r.id == *id)
     {

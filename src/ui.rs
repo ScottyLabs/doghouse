@@ -89,6 +89,7 @@ pub(crate) struct Ui {
     launch: Option<agents::Launch>,
     agent_diff: Option<String>,
     publish_run: Option<String>,
+    delete_run: Option<String>,
     error_popup: bool,
 }
 impl Ui {
