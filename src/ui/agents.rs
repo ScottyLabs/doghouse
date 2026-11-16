@@ -11,6 +11,7 @@ pub(super) struct Launch {
     pub field: usize,
     pub cursor: usize,
     pub resume: Option<String>,
+    pub settings: bool,
 }
 fn next_provider(provider: Provider) -> Provider {
     if provider == Provider::Codex {
@@ -36,6 +37,7 @@ fn launch(ui: &mut Ui, store: &Store, manager: &Manager, resume: Option<String>)
             field: 3,
             cursor: 0,
             resume: Some(id),
+            settings: false,
         });
     } else {
         let task = if ui.agent_view {
@@ -64,21 +66,38 @@ fn launch(ui: &mut Ui, store: &Store, manager: &Manager, resume: Option<String>)
                 })
             })
             .unwrap_or_default();
+        let default_mode =
+            if task["source"]["kind"] == "pr" || !PathBuf::from(&checkout).join(".git").exists() {
+                Mode::Plan
+            } else {
+                Mode::Implement
+            };
+        let preferred: Option<Provider> =
+            serde_json::from_value(store.data["agentDefaults"]["provider"].clone()).ok();
+        let needs_checkout = !PathBuf::from(&checkout).is_dir();
         ui.launch = Some(Launch {
             task,
-            provider: if Provider::Codex.available() {
+            provider: if let Some(provider) = preferred.filter(|provider| provider.available()) {
+                provider
+            } else if Provider::Codex.available() {
                 Provider::Codex
             } else {
                 Provider::Claude
             },
-            mode: Mode::Plan,
+            mode: default_mode,
+            cursor: if needs_checkout {
+                checkout.chars().count()
+            } else {
+                0
+            },
             checkout,
-            goal: "Inspect this task and propose a concrete implementation plan.".into(),
-            field: 2,
-            cursor: 0,
+            goal: String::new(),
+            field: if needs_checkout { 2 } else { 3 },
             resume: None,
+            settings: needs_checkout,
         });
     }
+    ui.error = false;
     Ok(())
 }
 fn selected_run(ui: &Ui, store: &Store) -> Result<Run> {
@@ -125,6 +144,7 @@ pub(super) fn key(
             KeyCode::Esc => return Ok(true),
             KeyCode::Tab => {
                 form.field = (form.field + 1) % 4;
+                form.settings = form.field != 3;
                 form.cursor = if form.field == 2 {
                     form.checkout.chars().count()
                 } else {
@@ -133,6 +153,7 @@ pub(super) fn key(
             }
             KeyCode::BackTab => {
                 form.field = (form.field + 3) % 4;
+                form.settings = form.field != 3;
                 form.cursor = if form.field == 2 {
                     form.checkout.chars().count()
                 } else {
@@ -140,13 +161,11 @@ pub(super) fn key(
                 };
             }
             KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => submit = true,
-            KeyCode::Enter if form.field < 3 => {
-                form.field += 1;
-                form.cursor = if form.field == 2 {
-                    form.checkout.chars().count()
-                } else {
-                    form.goal.chars().count()
-                };
+            KeyCode::Enter if form.field == 3 => submit = true,
+            KeyCode::Enter => {
+                form.field = 3;
+                form.settings = false;
+                form.cursor = form.goal.chars().count();
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ')
                 if form.field < 2 && form.resume.is_none() =>
@@ -212,6 +231,9 @@ pub(super) fn key(
             _ => {}
         }
         if submit {
+            if form.goal.trim().is_empty() && form.resume.is_none() {
+                form.goal = if form.mode == Mode::Implement { "Implement this task following the project instructions. Outline the approach first, then implement and run relevant checks." } else { "Inspect this task following the project instructions. Provide a concise plan, risks, and suggested checks." }.into();
+            }
             let (width, height) = crossterm::terminal::size()?;
             if width < 70 || height < 20 {
                 ui.launch = Some(form);
@@ -244,6 +266,8 @@ pub(super) fn key(
                         store.data["checkouts"][string(&form.task, "repo")] = json!(form.checkout);
                         store.save()?;
                     }
+                    store.data["agentDefaults"]["provider"] = serde_json::to_value(form.provider)?;
+                    store.save()?;
                     ui.agent_view = true;
                     ui.run_row = 0;
                     ui.message = format!("{} run started: {id}", form.provider.name());

@@ -245,138 +245,156 @@ pub(super) fn view(ui: &Ui, f: &mut ratatui::Frame, store: &Store, area: Rect) {
 pub(super) fn overlays(ui: &Ui, f: &mut ratatui::Frame) {
     let area = f.area();
     if let Some(form) = &ui.launch {
-        let rect = popup(area, 96, 25);
+        let rect = popup(area, 94, 25);
         f.render_widget(Clear, rect);
         let container = block(
             if form.resume.is_some() {
-                "Resume native session"
+                "Continue agent"
             } else {
-                "Launch project agent"
+                "Run agent on task"
             },
             true,
         )
-        .padding(Padding::horizontal(2));
+        .padding(Padding::new(2, 2, 1, 0));
         let inner = container.inner(rect);
         f.render_widget(container, rect);
         let regions = Layout::vertical([
             Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Length(4),
-            Constraint::Min(3),
+            Constraint::Length(5),
+            Constraint::Length(5),
+            Constraint::Min(2),
             Constraint::Length(3),
         ])
         .split(inner);
-        let provider = Line::from(vec![
-            label(
-                if form.field == 0 {
-                    "> Backend  "
-                } else {
-                    "  Backend  "
-                },
-                MUTED,
-            ),
-            Span::styled(
-                format!(" {} ", form.provider.name()),
-                style(BLUE).add_modifier(Modifier::BOLD),
-            ),
-            label(
-                if form.provider.available() {
-                    "available"
-                } else {
-                    "not installed on PATH"
-                },
-                if form.provider.available() {
-                    GREEN
-                } else {
-                    AMBER
-                },
-            ),
-        ]);
-        f.render_widget(
-            Paragraph::new(vec![
-                Line::from(label(
-                    if let Some(id) = &form.resume {
-                        ui.runs
-                            .iter()
-                            .find(|r| r.id == *id)
-                            .map(|r| format!("{} / {}", r.repository, r.task_title))
-                            .unwrap_or_default()
-                    } else {
-                        format!(
-                            "{} / {}",
-                            if form.task["localProject"].is_string() {
-                                string(&form.task, "directory")
-                            } else {
-                                string(&form.task, "repo")
-                            },
-                            string(&form.task, "title")
-                        )
-                    },
-                    TEXT,
-                )),
-                provider,
-                Line::from(label(
-                    "Left/Right changes backend. Uses its existing CLI login.",
-                    MUTED,
-                )),
-            ]),
-            regions[0],
-        );
-        f.render_widget(Paragraph::new(vec![Line::from(vec![label(if form.field==1{"> Mode     "}else{"  Mode     "},MUTED),Span::styled(form.mode.name(),style(BLUE).add_modifier(Modifier::BOLD))]),Line::from(label(if form.mode==Mode::Plan{"Inspects the chosen checkout; no repository edits requested."}else{"Creates a separate checkout from committed HEAD; leaves changes for review."},MUTED))]).wrap(Wrap{trim:false}),regions[1]);
-        let checkout = if form.field == 2 {
-            with_cursor(&form.checkout, form.cursor)
+        let title = if let Some(id) = &form.resume {
+            ui.runs
+                .iter()
+                .find(|run| run.id == *id)
+                .map(|run| run.task_title.clone())
+                .unwrap_or_default()
         } else {
-            clean(&form.checkout)
+            string(&form.task, "title").into()
         };
         f.render_widget(
             Paragraph::new(vec![
-                Line::from(label(
-                    if form.field == 2 {
-                        "> Checkout"
-                    } else {
-                        "  Checkout"
-                    },
-                    BLUE,
-                )),
-                Line::raw(checkout),
+                Line::styled(clean(&title), style(TEXT).add_modifier(Modifier::BOLD)),
                 Line::from(label(
                     if form.resume.is_some() {
-                        "Resumes the same backend session and checkout."
+                        "Follow up in the same native session"
                     } else {
-                        if form.task["localProject"].is_string() { "Registered local directory. Implementation requires a committed Git root." } else { "Must have a Git remote for the task's GCD repository." }
+                        if std::path::Path::new(&form.checkout).is_dir() {
+                            "Describe the outcome. The project and agent are already selected."
+                        } else {
+                            "Choose where this project's files live, then describe the outcome."
+                        }
                     },
                     MUTED,
                 )),
             ])
             .wrap(Wrap { trim: false }),
-            regions[2],
+            regions[0],
         );
-        let goal = if form.field == 3 {
+        let goal = if form.goal.is_empty() {
+            if form.resume.is_some() {
+                "What should the agent do next?".into()
+            } else {
+                "Optional goal; Enter works on the selected task".into()
+            }
+        } else if form.field == 3 {
             with_cursor(&form.goal, form.cursor)
         } else {
             clean(&form.goal)
         };
         f.render_widget(
-            Paragraph::new(format!(
-                "{} Goal\n{goal}",
-                if form.field == 3 { ">" } else { " " }
-            ))
-            .wrap(Wrap { trim: false })
-            .style(style(TEXT)),
-            regions[3],
+            Paragraph::new(goal)
+                .wrap(Wrap { trim: false })
+                .style(style(if form.goal.is_empty() { MUTED } else { TEXT }))
+                .block(block("Goal", form.field == 3).padding(Padding::horizontal(1))),
+            regions[1],
         );
+        let mode = if form.mode == Mode::Plan {
+            "Plan only / no edits"
+        } else {
+            "Implement task / separate checkout"
+        };
+        let row = |field: usize, name: &str, value: String| {
+            Line::from(vec![
+                label(
+                    format!(
+                        "{} {name:<10}",
+                        if form.settings && form.field == field {
+                            ">"
+                        } else {
+                            " "
+                        }
+                    ),
+                    MUTED,
+                ),
+                Span::styled(
+                    value,
+                    style(if form.settings && form.field == field {
+                        BLUE
+                    } else {
+                        TEXT
+                    })
+                    .add_modifier(if form.settings && form.field == field {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
+                ),
+            ])
+        };
+        f.render_widget(
+            Paragraph::new(vec![
+                row(
+                    0,
+                    "Agent",
+                    format!(
+                        "{}{}",
+                        form.provider.name(),
+                        if form.provider.available() {
+                            ""
+                        } else {
+                            " / not installed"
+                        }
+                    ),
+                ),
+                row(1, "Task mode", mode.into()),
+                row(
+                    2,
+                    "Directory",
+                    if form.field == 2 && form.settings {
+                        with_cursor(&form.checkout, form.cursor)
+                    } else {
+                        clean(&form.checkout)
+                    },
+                ),
+                Line::from(label(
+                    if form.settings {
+                        "Left/Right changes options / Tab next / Enter returns to goal"
+                    } else {
+                        "Tab changes settings; the defaults are ready to use."
+                    },
+                    BLUE,
+                )),
+            ])
+            .wrap(Wrap { trim: false }),
+            regions[2],
+        );
+        f.render_widget(Paragraph::new(if form.mode==Mode::Implement{"SETUP\nRead AGENTS.md and project docs, outline the approach, implement, run checks, and leave changes for review."}else{"SETUP\nRead AGENTS.md and project docs, inspect the task, and outline an approach. No repository edits."}).wrap(Wrap{trim:false}).style(style(MUTED)),regions[3]);
         f.render_widget(
             Paragraph::new(vec![
                 Line::from(label(
                     if ui.error {
-                        clean(&ui.message)
+                        clean(ui.message.lines().next().unwrap_or_default())
                     } else {
-                        "Tab fields / Left-Right options / Ctrl+S launch / Esc cancel".into()
+                        "Enter start agent / Tab settings / Esc cancel".into()
                     },
                     if ui.error { Color::Red } else { BLUE },
                 )),
                 Line::from(label(
-                    "This machine. No automatic push, merge, issue closure, or result publication.",
+                    "Uses the CLI's existing login. Results stay local until you publish them.",
                     MUTED,
                 )),
             ])

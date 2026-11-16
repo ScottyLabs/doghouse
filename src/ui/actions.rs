@@ -595,6 +595,51 @@ pub(super) fn key(
     Ok(false)
 }
 
+pub(super) fn paste(ui: &mut Ui, text: &str) -> Result<()> {
+    let (value, cursor, maximum) = if let Some(form) = ui.launch.as_mut() {
+        if form.field < 2 || (form.field == 2 && form.resume.is_some()) {
+            return Ok(());
+        }
+        (
+            if form.field == 2 {
+                &mut form.checkout
+            } else {
+                &mut form.goal
+            },
+            &mut form.cursor,
+            6000usize,
+        )
+    } else if let Some((mode, value)) = ui.prompt.as_mut() {
+        (
+            value,
+            &mut ui.cursor,
+            if matches!(*mode, 'C' | 'd') {
+                20000
+            } else {
+                4096
+            },
+        )
+    } else {
+        return Ok(());
+    };
+    ensure!(
+        value.len() + text.len() <= maximum,
+        "Pasted text is too long"
+    );
+    let text = text.replace("\r\n", "\n");
+    let mut chars = value.chars().collect::<Vec<_>>();
+    let inserted = text
+        .chars()
+        .filter(|character| !character.is_control() || matches!(*character, '\n' | '\t'))
+        .collect::<Vec<_>>();
+    *cursor = (*cursor).min(chars.len());
+    let count = inserted.len();
+    chars.splice(*cursor..*cursor, inserted);
+    *cursor += count;
+    *value = chars.into_iter().collect();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

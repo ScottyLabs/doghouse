@@ -443,7 +443,10 @@ pub(crate) fn tui(
         "An interactive terminal is required"
     );
     let mut terminal = ratatui::init();
-    let result = run_ui(&mut terminal, store, workspace, project, offline);
+    let result = crossterm::execute!(io::stdout(), event::EnableBracketedPaste)
+        .map_err(anyhow::Error::from)
+        .and_then(|_| run_ui(&mut terminal, store, workspace, project, offline));
+    let _ = crossterm::execute!(io::stdout(), event::DisableBracketedPaste);
     ratatui::restore();
     result
 }
@@ -733,7 +736,15 @@ fn run_ui(
         if !pending? {
             continue;
         }
-        let Event::Key(key) = event::read()? else {
+        let next = event::read()?;
+        if let Event::Paste(text) = next {
+            if let Err(error) = actions::paste(&mut ui, &text) {
+                ui.error = true;
+                ui.message = format!("{error:#}");
+            }
+            continue;
+        }
+        let Event::Key(key) = next else {
             continue;
         };
         if key.kind != KeyEventKind::Press {
@@ -930,6 +941,7 @@ mod tests {
                         field: 2,
                         cursor: 0,
                         resume: None,
+                        settings: false,
                     }),
                     ..Ui::default()
                 },

@@ -2,7 +2,11 @@
 
 ## Codex and Claude Code
 
-Select a task and press `A` to launch an agent. Press `a` to open the Agents view. Choose a backend, mode, local checkout, and goal; Tab moves between fields, Left/Right changes options, Ctrl+U clears a text field, and Ctrl+S launches. For shared tasks, the checkout must have a Git remote matching the task repository. Local directory tasks use their registered directory; Plan supports plain directories and Implement requires a committed Git root. Shepherd remembers checkouts by repository.
+Select a task and press `A`. Type an optional goal and press Enter; an empty goal uses the task itself. Shepherd selects an installed CLI and the project's known checkout. Tab opens secondary settings for the agent, task mode, and directory; Left/Right changes options, Enter returns to the goal, and Esc cancels. Ctrl+S is an alternative launch key. Pasting multiline goals does not submit them.
+
+For shared tasks, the checkout must have a Git remote matching the repository. Local tasks use their registered directory. Git-backed issue tasks default to implementation in a separate checkout; PRs and plain directories default to planning. The last available backend is remembered; native CLI model and login settings are retained.
+
+Before starting, Shepherd loads applicable `AGENTS.md` files from the original directory and its parents, in precedence order, and includes them in the run context. The run records which files were loaded. Implementation instructions require reading project documentation, outlining the approach and checks before editing, implementing, running relevant checks, and reporting the result. Agents must honor deeper instructions where they edit.
 
 - **Plan** uses Codex read-only mode or Claude Code plan mode with read tools. It inspects the selected checkout, including local changes.
 - **Implement** creates a detached Git worktree from committed HEAD. Your original checkout remains available. New files appear in worktree status; the diff includes tracked changes from the base commit.

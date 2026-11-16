@@ -67,3 +67,5 @@ shepherd local remove LOCAL_PROJECT_ID
 ```
 
 The grouped keyboard guide uses two columns in wide terminals. Arrows and Page Up/Down scroll; Esc closes it.
+
+Agent launch starts at the goal. Press Enter to start, Tab to change the inferred settings, or Esc to cancel. Applicable project instructions are loaded before the agent outlines, implements, and checks its work.
