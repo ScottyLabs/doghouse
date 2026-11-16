@@ -41,6 +41,8 @@ fn reference(task: &Value) -> String {
             },
             n
         )
+    } else if task["localProject"].is_string() {
+        "LOCAL".into()
     } else {
         "DRAFT".into()
     }
@@ -65,6 +67,13 @@ fn priority(task: &Value) -> (&str, Color) {
     }
 }
 fn short_repo(task: &Value) -> String {
+    if task["localProject"].is_string() {
+        return PathBuf::from(string(task, "directory"))
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+    }
     string(task, "repo")
         .rsplit('/')
         .next()
@@ -142,7 +151,11 @@ fn detail_lines(task: &Value, store: &Store) -> Vec<Line<'static>> {
         )))
     } else {
         lines.push(Line::from(label(
-            "Unsent draft  /  stored only on this machine",
+            if task["localProject"].is_string() {
+                "Local task / stored only on this machine"
+            } else {
+                "Unsent draft / stored only on this machine"
+            },
             MUTED,
         )))
     }
@@ -313,7 +326,9 @@ fn inspector(ui: &Ui, f: &mut ratatui::Frame, store: &Store, area: Rect, expande
             area,
         )
     } else {
-        let message = if store.catalog.workspaces.is_empty() {
+        let message = if ui.local_scope() {
+            "Local directory project.\n\nn  Add a local task\nA  Start an agent for a task\nc  Add a directory\nP  Choose a project"
+        } else if store.catalog.workspaces.is_empty() {
             "Governance has not loaded.\n\ng  Refresh through Collar\nw  Choose a cached workspace"
         } else if ui.repos(store).is_empty() {
             "This Governance project has no repositories.\n\nG  Open its Governance declaration\nP  Choose another project\nw  Choose a workspace"
@@ -337,7 +352,7 @@ fn task_list(ui: &Ui, f: &mut ratatui::Frame, store: &Store, area: Rect) {
         .collect();
     let title = format!("{} / {} tasks", NAMES[ui.column], items.len());
     if items.is_empty() {
-        f.render_widget(Paragraph::new(if ui.repos(store).is_empty(){"\n No repositories declared in this project.\n\n P  Choose a project\n G  Open Governance declaration"}else{"\n No tasks in this view.\n\n n  Create a GCD issue\n s  Refresh shared tasks\n h/l  Browse stages\n Esc  Clear search"}).style(style(MUTED)).block(block(title,true).padding(Padding::horizontal(1))),area);
+        f.render_widget(Paragraph::new(if ui.local_scope(){"\n No local tasks in this view.\n\n n  Add a task\n c  Add a directory\n P  Choose a local project"}else if ui.repos(store).is_empty(){"\n No repositories declared in this project.\n\n P  Choose a project\n G  Open Governance declaration"}else{"\n No tasks in this view.\n\n n  Create a GCD issue\n s  Refresh shared tasks\n h/l  Browse stages\n Esc  Clear search"}).style(style(MUTED)).block(block(title,true).padding(Padding::horizontal(1))),area);
         return;
     }
     let rows: Vec<ListItem> = items
@@ -537,7 +552,11 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
         .unwrap_or(ui.workspace_name(store));
     let visible = ui.visible(store);
     let open = visible.iter().filter(|t| t["stage"] != "done").count();
-    let source = ["Issues + PRs", "Issues", "Pull requests", "Unsent drafts"][ui.source];
+    let source = if ui.local_scope() && ui.source == 1 {
+        "Local tasks"
+    } else {
+        ["Issues + PRs", "Issues", "Pull requests", "Unsent drafts"][ui.source]
+    };
     f.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
@@ -704,8 +723,9 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
                     .tasks()
                     .iter()
                     .filter(|t| {
-                        project.repositories.iter().any(|r| t["repo"] == *r)
-                            && t["source"]["kind"] == "issue"
+                        ((project.repositories.iter().any(|r| t["repo"] == *r)
+                            && t["source"]["kind"] == "issue")
+                            || (team.slug == local::WORKSPACE && t["localProject"] == project.slug))
                             && t["stage"] != "done"
                     })
                     .count();
@@ -749,7 +769,14 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
         }
         lines.extend([
             Line::raw(""),
-            Line::from(label("GOVERNANCE", MUTED)),
+            Line::from(label(
+                if ui.local_scope() {
+                    "LOCAL / THIS MACHINE"
+                } else {
+                    "GOVERNANCE"
+                },
+                MUTED,
+            )),
             Line::from(label(
                 if ui.discovering {
                     "Refreshing teams...".into()
@@ -813,7 +840,7 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
             if ui.agent_view {Line::from(label("a Tasks / A Launch / r Resume / s Stop / Enter Result / d Diff / P Publish / ? Help",BLUE))}else{
             Line::from(vec![
                 label("n", BLUE),
-                label(" GCD issue  ", TEXT),
+                label(if ui.local_scope() { " task  " } else { " GCD issue  " }, TEXT),
                 label("m", BLUE),
                 label(" move  ", TEXT),
                 label("/", BLUE),
@@ -886,6 +913,7 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
                 "REVIEW",
                 "  N   Unsent local draft          a   Agents view",
                 "  A   Launch Codex / Claude Code  !   Last error details",
+                "  c   Add local directory        X   Forget local project",
                 "",
                 "Edits to GCD issues are shared. Local drafts remain unsent.",
                 "",
@@ -902,8 +930,18 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
     if let Some(stage) = ui.moving {
         let rect = popup(area, 44, 11);
         f.render_widget(Clear, rect);
+        let shared = ui
+            .selected(store)
+            .is_some_and(|task| !task["source"].is_null());
         let mut lines = vec![
-            Line::from(label("Enter applies this stage on GCD.", MUTED)),
+            Line::from(label(
+                if shared {
+                    "Enter applies this stage on GCD."
+                } else {
+                    "Enter moves this task locally."
+                },
+                MUTED,
+            )),
             Line::raw(""),
         ];
         for (i, name) in NAMES.iter().enumerate() {
@@ -912,7 +950,7 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
                     "{} {}  {}",
                     if i == stage { ">" } else { " " },
                     i + 1,
-                    if i == 4 {
+                    if i == 4 && shared {
                         "Done / close issue on GCD"
                     } else {
                         name
@@ -1013,13 +1051,21 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
         if *mode == '/' {
             return;
         }
-        let (title, hint) = match mode {
+        let (mut title, mut hint) = match mode {
             '/' => ("Search tasks", "Enter apply  ·  Esc cancel"),
+            'n' if ui.local_scope() => (
+                "New local task",
+                "Enter saves in this directory project / Esc cancel",
+            ),
             'n' => ("Create GCD issue", "Enter creates on GCD  ·  Esc cancel"),
             'N' => ("Unsent local draft", "Enter saves locally  ·  Esc cancel"),
             'c' => (
-                "Governance projects",
-                "owner/repository  ·  Enter add  ·  Esc cancel",
+                "Add local directory",
+                "Directory path / Enter adds / Esc cancels",
+            ),
+            'X' => (
+                "Forget local project",
+                "Type remove / keeps files, tasks, and runs / Esc cancels",
             ),
             'e' => ("Edit issue title", "Enter saves on GCD  ·  Esc cancel"),
             'p' => (
@@ -1036,6 +1082,30 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
             ),
             _ => ("Input", "Enter apply  ·  Esc cancel"),
         };
+        if ui
+            .selected(store)
+            .is_some_and(|task| task["source"].is_null())
+        {
+            match mode {
+                'e' => {
+                    title = "Edit local task title";
+                    hint = "Enter saves locally / Esc cancels";
+                }
+                'd' => {
+                    title = "Edit local description";
+                    hint = "Enter new line / Ctrl+S saves locally / Esc cancels";
+                }
+                'o' => {
+                    title = "Local task owner";
+                    hint = "Enter saves locally / Esc cancels";
+                }
+                'p' => {
+                    title = "Local task priority";
+                    hint = "high / normal / low / Enter saves locally";
+                }
+                _ => {}
+            }
+        }
         let rect = popup(area, 76, if *mode == 'd' { 18 } else { 8 });
         f.render_widget(Clear, rect);
         let mut text = vec![Line::from(label(hint, MUTED)), Line::raw("")];
@@ -1043,12 +1113,12 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
             text.insert(
                 0,
                 Line::from(label(
-                    "Track a repository locally. Press s afterward to import its work.",
+                    "Any existing directory. This project stays on this machine.",
                     TEXT,
                 )),
             );
         }
-        if matches!(*mode, 'n' | 'N') {
+        if matches!(*mode, 'n' | 'N') && !ui.local_scope() {
             text.insert(
                 0,
                 Line::from(label(

@@ -38,9 +38,9 @@ fn edit(
         );
         ensure!(mode != 'e' || !value.trim().is_empty(), "Title is required");
         task[field] = json!(value);
-        touch(task, "Updated unsent draft");
+        touch(task, "Updated local task");
         store.save()?;
-        ui.message = "Unsent draft updated".into();
+        ui.message = "Task updated locally".into();
     } else {
         ui.pending_edit = Some((mode, value.clone()));
         ui.write_issue(task.clone(), field, value, sender)?;
@@ -60,6 +60,56 @@ fn prompt(
             ui.row = 0
         }
         'e' | 'd' | 'o' | 'p' => edit(ui, store, mode, value, sender)?,
+        'c' => {
+            let project = local::add(store, PathBuf::from(value), None)?;
+            ui.workspace = Some(local::WORKSPACE.into());
+            ui.project = Some(project.id);
+            ui.source = 1;
+            ui.repo = 0;
+            ui.column = 0;
+            ui.row = 0;
+            store.data["preferences"] = json!({"workspace":ui.workspace,"project":ui.project});
+            store.save()?;
+            ui.message = "Local directory project added / n new task / A agent".into();
+        }
+        'X' => {
+            ensure!(
+                value == "remove",
+                "Type remove to forget the registration; files and tasks are retained"
+            );
+            let id = ui
+                .project
+                .as_deref()
+                .context("Select a local project first")?;
+            local::remove(store, id)?;
+            ui.project = None;
+            if local::projects(&store.data)?.is_empty() {
+                ui.workspace = None;
+            }
+            store.data["preferences"] = json!({"workspace":ui.workspace,"project":ui.project});
+            store.save()?;
+            ui.message = "Registration removed. Files, tasks, and agent runs retained.".into();
+        }
+        'n' if ui.local_scope() => {
+            let id = local::task(
+                store,
+                ui.project
+                    .as_deref()
+                    .context("Choose a local project with P first")?,
+                &value,
+            )?;
+            store.task_mut(&id)?["stage"] = json!(STAGES[ui.column]);
+            store.save()?;
+            ui.source = 1;
+            ui.query.clear();
+            ui.row = ui
+                .visible(store)
+                .iter()
+                .filter(|task| task["stage"] == STAGES[ui.column])
+                .count()
+                .saturating_sub(1);
+            ui.message = "Task saved in this local project".into();
+        }
         'n' => {
             let repo = ui
                 .repo
@@ -177,10 +227,10 @@ pub(super) fn key(
                 );
                 if task["source"].is_null() {
                     task["stage"] = json!(STAGES[stage]);
-                    touch(task, "Moved unsent draft");
+                    touch(task, "Moved local task");
                     store.save()?;
                     ui.column = stage;
-                    ui.message = "Draft moved locally".into();
+                    ui.message = "Task moved locally".into();
                 } else {
                     ui.write_issue(task.clone(), "stage", STAGES[stage].into(), sender)?;
                 }
@@ -283,7 +333,20 @@ pub(super) fn key(
             ui.open_picker(PickKind::Project)
         }
         KeyCode::Char('r') => ui.open_picker(PickKind::Repository),
+        KeyCode::Char('c') => ui.open_prompt('c', String::new()),
+        KeyCode::Char('X') if ui.local_scope() => {
+            ensure!(ui.project.is_some(), "Choose a local project with P first");
+            ensure!(
+                ui.active_runs == 0,
+                "Stop active agents before forgetting a project"
+            );
+            ui.open_prompt('X', String::new());
+        }
         KeyCode::Char('G') => {
+            ensure!(
+                !ui.local_scope(),
+                "Local directory projects are managed here; c adds a directory"
+            );
             let suffix = if let Some(slug) = &ui.workspace {
                 ensure!(
                     slug.chars()
@@ -375,7 +438,7 @@ pub(super) fn key(
         }
         KeyCode::Char(c @ ('n' | 'N')) => {
             ensure!(!ui.writing, "A GCD write is already running");
-            if c == 'n' {
+            if c == 'n' && !ui.local_scope() {
                 ensure!(
                     !ui.repos(store).is_empty(),
                     "This project has no repositories; choose another project with P"

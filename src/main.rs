@@ -19,6 +19,7 @@ use std::{
 
 mod agents;
 mod governance;
+mod local;
 mod shared;
 
 const STAGES: [&str; 5] = ["backlog", "ready", "in-progress", "review", "done"];
@@ -45,6 +46,11 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Action {
+    /// Manage directory projects stored only on this machine.
+    Local {
+        #[command(subcommand)]
+        command: LocalAction,
+    },
     /// Refresh canonical teams and projects from Governance through Collar.
     Discover,
     /// Read issues and PRs through Collar; defaults to the selected Governance scope.
@@ -110,6 +116,21 @@ enum Action {
         #[arg(long)]
         reject: bool,
     },
+}
+#[derive(Subcommand)]
+enum LocalAction {
+    /// Add a directory, or update its display name.
+    Add {
+        directory: PathBuf,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// List registered local directories.
+    List,
+    /// Forget a registration; keep its files, tasks, and agent runs.
+    Remove { id: String },
+    /// Create a local task in a directory project.
+    Task { project: String, title: String },
 }
 fn collar_command() -> Command {
     Command::new(std::env::var_os("SHEPHERD_COLLAR").unwrap_or_else(|| "collar".into()))
@@ -185,6 +206,7 @@ impl Store {
             serde_json::from_value(data["governance"].clone())
                 .context("Invalid cached Governance catalog")?
         };
+        let catalog = local::catalog(catalog, &data)?;
         Ok(Self {
             dir,
             data,
@@ -208,8 +230,8 @@ impl Store {
             serde_json::from_value(data["governance"].clone())
                 .context("Invalid cached Governance catalog")?
         };
+        self.catalog = local::catalog(catalog, &data)?;
         self.data = data;
-        self.catalog = catalog;
         Ok(())
     }
     fn save(&self) -> Result<()> {
@@ -590,6 +612,22 @@ fn main() -> Result<()> {
             cli.project,
             cli.offline,
         )?,
+        Some(Action::Local { command }) => match command {
+            LocalAction::Add { directory, name } => println!(
+                "{}",
+                serde_json::to_string_pretty(&local::add(&mut store, directory, name)?)?
+            ),
+            LocalAction::List => println!(
+                "{}",
+                serde_json::to_string_pretty(&local::projects(&store.data)?)?
+            ),
+            LocalAction::Remove { id } => local::remove(&mut store, &id)?,
+            LocalAction::Task { project, title } => {
+                let id = local::task(&mut store, &project, &title)?;
+                store.save()?;
+                println!("{id}");
+            }
+        },
         Some(Action::Discover) => {
             ensure!(!cli.offline, "Discovery requires online access");
             governance::apply(&mut store, governance::discover()?)?;

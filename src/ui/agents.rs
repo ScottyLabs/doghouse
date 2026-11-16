@@ -47,11 +47,12 @@ fn launch(ui: &mut Ui, store: &Store, manager: &Manager, resume: Option<String>)
         .context("Choose a project task before starting an agent")?;
         let repository = string(&task, "repo");
         ensure!(
-            repo_valid(repository),
+            repo_valid(repository) || task["localProject"].is_string(),
             "Choose a task with a project repository"
         );
-        let checkout = store.data["checkouts"][repository]
+        let checkout = task["directory"]
             .as_str()
+            .or_else(|| store.data["checkouts"][repository].as_str())
             .map(str::to_owned)
             .or_else(|| {
                 std::env::var_os("HOME").map(|home| {
@@ -239,7 +240,7 @@ pub(super) fn key(
             };
             match result {
                 Ok(id) => {
-                    if form.resume.is_none() {
+                    if form.resume.is_none() && form.task["localProject"].is_null() {
                         store.data["checkouts"][string(&form.task, "repo")] = json!(form.checkout);
                         store.save()?;
                     }
@@ -323,21 +324,32 @@ pub(super) fn key(
                 .find(|task| task["id"] == run.task_id)
                 .cloned()
                 .context("Task is no longer cached; refresh its original project")?;
-            let (workspace, project) = store
-                .catalog
-                .workspaces
-                .iter()
-                .find_map(|w| {
-                    w.projects
+            if let Some(project) = task["localProject"].as_str() {
+                ensure!(
+                    local::projects(&store.data)?
                         .iter()
-                        .find(|p| p.repositories.contains(&run.repository))
-                        .map(|p| (w.slug.clone(), p.slug.clone()))
-                })
-                .context("Repository is no longer in Governance; O opens its source")?;
-            ui.workspace = Some(workspace);
-            ui.project = Some(project);
+                        .any(|entry| entry.id == project),
+                    "Local project was forgotten. Re-add its directory with c to restore its tasks"
+                );
+                ui.workspace = Some(local::WORKSPACE.into());
+                ui.project = Some(project.into());
+            } else {
+                let (workspace, project) = store
+                    .catalog
+                    .workspaces
+                    .iter()
+                    .find_map(|w| {
+                        w.projects
+                            .iter()
+                            .find(|p| p.repositories.contains(&run.repository))
+                            .map(|p| (w.slug.clone(), p.slug.clone()))
+                    })
+                    .context("Repository is no longer in Governance; O opens its source")?;
+                ui.workspace = Some(workspace);
+                ui.project = Some(project);
+            }
             ui.repo = 0;
-            ui.source = if task["source"]["kind"] == "issue" {
+            ui.source = if task["localProject"].is_string() || task["source"]["kind"] == "issue" {
                 1
             } else if task["source"]["kind"] == "pr" {
                 2

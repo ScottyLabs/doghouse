@@ -6,7 +6,7 @@ A Rust terminal project manager for ScottyLabs. Governance defines workspaces an
 nix run . -- --workspace devops
 ```
 
-Use `w` for a workspace, `P` for a project, and `s` to refresh tasks. The task list has a live preview; `v` switches to kanban. `A` launches Codex or Claude Code for a task; `a` opens local runs, activity, results, and diff review. `?` shows actions. [Terminal workflow](docs/tui.md) covers editing and shared state.
+Press `c` to add a directory under Local projects; `n` then creates tasks stored on this machine. Use `w` for a workspace, `P` for a project, and `s` to refresh tasks. The task list has a live preview; `v` switches to kanban. `A` launches Codex or Claude Code for a task; `a` opens local runs, activity, results, and diff review. `?` shows actions. [Terminal workflow](docs/tui.md) covers editing and shared state.
 
 The Nix package and development shell pin the [Collar integration](https://git.cmu.dev/ScottyLabs/collar/compare/main...fix/governance-schema), including typed team discovery and current Governance schema support. No separate Collar upgrade is needed for `nix run`. For development, use `collar dev run -- shepherd --workspace devops`; `SHEPHERD_COLLAR` can explicitly select a test binary.
 

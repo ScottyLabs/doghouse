@@ -88,8 +88,29 @@ impl Ui {
         let repos = self.repos(store);
         self.runs
             .iter()
-            .filter(|run| self.run_all || repos.contains(&run.repository))
+            .filter(|run| {
+                self.run_all
+                    || repos.contains(&run.repository)
+                    || store.tasks().iter().any(|task| {
+                        task["id"] == run.task_id && self.local_task_visible(store, task)
+                    })
+            })
             .collect()
+    }
+    fn local_task_visible(&self, store: &Store, task: &Value) -> bool {
+        task["localProject"].as_str().is_some_and(|id| {
+            store.catalog.workspaces.iter().any(|workspace| {
+                workspace.slug == local::WORKSPACE
+                    && workspace.projects.iter().any(|project| project.slug == id)
+            }) && self
+                .workspace
+                .as_deref()
+                .is_none_or(|workspace| workspace == local::WORKSPACE)
+                && self.project.as_deref().is_none_or(|project| project == id)
+        })
+    }
+    fn local_scope(&self) -> bool {
+        self.workspace.as_deref() == Some(local::WORKSPACE)
     }
     fn open_prompt(&mut self, mode: char, value: String) {
         self.cursor = value.chars().count();
@@ -139,14 +160,18 @@ impl Ui {
             .tasks()
             .iter()
             .filter(|t| {
-                let draft = t["source"].is_null();
-                (if draft {
+                let local = t["localProject"].is_string();
+                let draft = t["source"].is_null() && !local;
+                (if local {
+                    self.local_task_visible(store, t)
+                } else if draft {
                     self.source == 3
                         && (string(t, "repo").is_empty() || repos.iter().any(|r| t["repo"] == *r))
                 } else {
                     repos.iter().any(|r| t["repo"] == *r)
                 }) && selected.is_none_or(|repo| t["repo"] == *repo)
                     && (self.source == 0
+                        || (local && self.source == 1)
                         || match self.source {
                             1 => t["source"]["kind"] == "issue",
                             2 => t["source"]["kind"] == "pr",
@@ -238,11 +263,11 @@ impl Ui {
                             w.projects.iter().map(|p| Choice {
                                 id: Some(p.slug.clone()),
                                 name: p.name.clone(),
-                                description: format!(
-                                    "{}  /  {} repositories",
-                                    w.name,
-                                    p.repositories.len()
-                                ),
+                                description: if w.slug == local::WORKSPACE {
+                                    p.description.clone()
+                                } else {
+                                    format!("{} / {} repositories", w.name, p.repositories.len())
+                                },
                             })
                         }),
                 );
@@ -292,6 +317,10 @@ impl Ui {
         Ok(())
     }
     fn start_sync(&mut self, store: &Store, sender: &Sender<Job>) -> Result<()> {
+        if self.local_scope() {
+            self.message = "Local directory projects / no remote refresh needed".into();
+            return Ok(());
+        }
         ensure!(!self.offline, "Offline mode cannot refresh GCD");
         ensure!(self.syncing == 0, "A refresh is already running");
         let repos = self.repos(store);
@@ -417,17 +446,38 @@ fn run_ui(
         signal_hook::flag::register(signal, interrupted.clone())?;
     }
     let (workspace, project) = initial_scope(workspace, project, &store.data["preferences"]);
+    let saved_view = store.data["preferences"]["workspace"].as_str() == workspace.as_deref()
+        && store.data["preferences"]["project"].as_str() == project.as_deref();
+    let source = if saved_view {
+        store.data["preferences"]["source"]
+            .as_u64()
+            .filter(|source| *source <= 3)
+            .unwrap_or(1) as usize
+    } else {
+        1
+    };
+    let column = if saved_view {
+        store.data["preferences"]["column"]
+            .as_u64()
+            .filter(|column| *column <= 4)
+            .unwrap_or(0) as usize
+    } else {
+        0
+    };
     let mut ui = Ui {
         workspace,
         project,
-        source: 1,
+        source,
+        column,
         run_all: true,
         offline,
         ..Ui::default()
     };
     let (sender, receiver) = mpsc::channel::<Job>();
     let mut manager = crate::agents::Manager::open(&store.dir)?;
-    if offline {
+    if ui.local_scope() {
+        ui.message = "Local directory projects / c add directory / n task / A agent".into();
+    } else if offline {
         ui.message = "OFFLINE / cached Governance and GCD data".into();
     } else {
         ui.start_discovery(&sender)?;
@@ -714,6 +764,47 @@ mod tests {
         assert_eq!(ui.visible(&store).len(), 2);
         ui.source = 3;
         assert_eq!(ui.visible(&store).len(), 1);
+        Ok(())
+    }
+    #[test]
+    fn directory_tasks_are_scoped_and_visible_without_draft_mode() -> Result<()> {
+        let (temporary, mut store) = fixture()?;
+        let directory = temporary.path().join("plain");
+        fs::create_dir(&directory)?;
+        let project = local::add(&mut store, directory, None)?;
+        local::task(&mut store, &project.id, "Local work")?;
+        let shared = Ui {
+            workspace: Some("devops".into()),
+            source: 1,
+            ..Ui::default()
+        };
+        assert!(
+            shared
+                .visible(&store)
+                .iter()
+                .all(|task| task["localProject"].is_null())
+        );
+        let local = Ui {
+            workspace: Some(local::WORKSPACE.into()),
+            project: Some(project.id),
+            source: 1,
+            ..Ui::default()
+        };
+        assert_eq!(local.visible(&store).len(), 1);
+        assert_eq!(local.visible(&store)[0]["title"], "Local work");
+        local::remove(
+            &mut store,
+            local.project.as_deref().context("Missing project")?,
+        )?;
+        let all = Ui {
+            source: 1,
+            ..Ui::default()
+        };
+        assert!(
+            all.visible(&store)
+                .iter()
+                .all(|task| task["localProject"].is_null())
+        );
         Ok(())
     }
     #[test]

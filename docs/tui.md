@@ -47,3 +47,19 @@ The user-level cache contains private repository content; keep it private. It is
 `N` creates a local draft, shown only in the explicit draft view. Legacy local stage/owner/priority overlays are retained as `localPlan` notes when a shared issue refreshes, while its displayed fields come from GCD. Local agent claims and proposal notes are not cross-machine coordination. Accepting a cached proposal creates unsent drafts; it does not publish multiple issues implicitly.
 
 The GCD API does not provide an atomic compare-and-swap for these edits. Shepherd checks the inspected fields before writing and rechecks immediately before label replacement, but another client can still race that final request.
+
+## Local directory projects
+
+Press `c` to add an existing directory. Relative paths and `~/` are accepted. It appears under **Local projects** in the workspace picker. No Git repository, Collar login, or Governance declaration is required. Select a project with `P`, then use `n` to create tasks; title, description, owner, priority, and stage edits save locally. These tasks are labeled LOCAL and appear in the ordinary task view.
+
+`A` launches an agent using that project's registered directory. Plan works in plain directories. Implement requires a committed Git root and uses a separate worktree. Local tasks have no GCD issue, so result publication is unavailable.
+
+`X` forgets the selected local project after you type `remove`. It keeps files, tasks, and agent history; adding the same canonical directory restores its tasks. Local registrations are machine-specific and survive Governance refreshes. Shared project definitions remain in Governance.
+
+```sh
+shepherd local add ~/dev/shepherd --name Shepherd
+shepherd local list
+shepherd local task LOCAL_PROJECT_ID 'Review the Terrier trial'
+shepherd --workspace @local --project LOCAL_PROJECT_ID
+shepherd local remove LOCAL_PROJECT_ID
+```

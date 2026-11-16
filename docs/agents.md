@@ -2,7 +2,7 @@
 
 ## Codex and Claude Code
 
-Select a task and press `A` to launch an agent. Press `a` to open the Agents view. Choose a backend, mode, local checkout, and goal; Tab moves between fields, Left/Right changes options, Ctrl+U clears a text field, and Ctrl+S launches. The checkout must have a Git remote matching the task repository. Shepherd remembers checkouts by repository.
+Select a task and press `A` to launch an agent. Press `a` to open the Agents view. Choose a backend, mode, local checkout, and goal; Tab moves between fields, Left/Right changes options, Ctrl+U clears a text field, and Ctrl+S launches. For shared tasks, the checkout must have a Git remote matching the task repository. Local directory tasks use their registered directory; Plan supports plain directories and Implement requires a committed Git root. Shepherd remembers checkouts by repository.
 
 - **Plan** uses Codex read-only mode or Claude Code plan mode with read tools. It inspects the selected checkout, including local changes.
 - **Implement** creates a detached Git worktree from committed HEAD. Your original checkout remains available. New files appear in worktree status; the diff includes tracked changes from the base commit.

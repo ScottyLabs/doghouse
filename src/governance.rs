@@ -225,7 +225,7 @@ pub(crate) fn apply(store: &mut Store, catalog: Catalog) -> Result<()> {
         store.data = previous;
         return Err(error);
     }
-    store.catalog = catalog;
+    store.catalog = local::catalog(catalog, &store.data)?;
     Ok(())
 }
 

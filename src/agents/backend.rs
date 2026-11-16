@@ -6,6 +6,9 @@ pub(super) fn command(run: &Run, executable: &std::ffi::OsStr) -> Result<Command
     match run.provider {
         Provider::Codex => {
             command.args(["exec", "--json", "--color", "never"]);
+            if run.repository.is_empty() {
+                command.arg("--skip-git-repo-check");
+            }
             if run.mode == Mode::Plan {
                 command.args(["--sandbox", "read-only", "-c", "approval_policy=\"never\""]);
             } else {

@@ -51,7 +51,14 @@ fn lines_for(run: &Run, output: bool) -> Vec<Line<'static>> {
             label(format!("  {}", run.mode.name()), MUTED),
         ]),
         Line::from(label(run.state.name(), state_color(run.state))),
-        Line::from(label(format!("Repository  {}", run.repository), MUTED)),
+        Line::from(label(
+            if run.repository.is_empty() {
+                "Local directory project".into()
+            } else {
+                format!("Repository  {}", run.repository)
+            },
+            MUTED,
+        )),
         Line::from(label(
             format!("Checkout    {}", run.directory.display()),
             MUTED,
@@ -190,7 +197,11 @@ pub(super) fn view(ui: &Ui, f: &mut ratatui::Frame, store: &Store, area: Rect) {
                 Line::from(label(
                     format!(
                         "{} / {}",
-                        run.repository.rsplit('/').next().unwrap_or(&run.repository),
+                        if run.repository.is_empty() {
+                            "local directory"
+                        } else {
+                            run.repository.rsplit('/').next().unwrap_or(&run.repository)
+                        },
                         if run.mode == Mode::Plan {
                             "Plan"
                         } else {
@@ -293,7 +304,11 @@ pub(super) fn overlays(ui: &Ui, f: &mut ratatui::Frame) {
                     } else {
                         format!(
                             "{} / {}",
-                            string(&form.task, "repo"),
+                            if form.task["localProject"].is_string() {
+                                string(&form.task, "directory")
+                            } else {
+                                string(&form.task, "repo")
+                            },
                             string(&form.task, "title")
                         )
                     },
@@ -328,7 +343,7 @@ pub(super) fn overlays(ui: &Ui, f: &mut ratatui::Frame) {
                     if form.resume.is_some() {
                         "Resumes the same backend session and checkout."
                     } else {
-                        "Must have a Git remote for the task's GCD repository."
+                        if form.task["localProject"].is_string() { "Registered local directory. Implementation requires a committed Git root." } else { "Must have a Git remote for the task's GCD repository." }
                     },
                     MUTED,
                 )),
