@@ -90,3 +90,7 @@ Letter shortcuts ignore Ctrl/Alt modifiers unless explicitly documented; Ctrl+Z 
 Pickers use Up/Down or j/k to select, Home/End to jump, and `/` to enter filter text. In filter mode every letter, including j/k, is searchable; arrows and Ctrl+N/P still move the selection. Esc leaves filter mode, then closes the picker. Enter chooses the highlighted item. The footer shows these controls.
 
 Text editors and agent goals also support Ctrl+A/E (start/end), Ctrl+U/K (delete before/after the cursor), and Ctrl+W (delete the previous word). Home/End selects the first/last task or run, and Ctrl+D/U pages down/up; task editing shortcuts stay scoped to the task view. Every Shepherd window using the same cache can open a native conversation with Enter. Ctrl+Z detaches only that terminal client; other attached windows keep their conversation open.
+
+Reads run with a shared limit of four Collar processes. Refreshes use at most three slots, reserving one for discussion reads and write preconditions. Repositories appear as their complete issue/PR snapshots finish; one failed repository leaves its cached tasks intact while others update. My work searches and detail reads use the same limit, and its tasks and account metadata save together. Manual refresh continues to read the forge rather than a time-based API cache.
+
+Board saves buffer JSON before fsync and atomic replacement. The UI checks the board file identity and timestamps between events, reloading it when another window replaces or edits it. The existing board format and explicit reload behavior are preserved.

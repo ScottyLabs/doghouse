@@ -10,8 +10,10 @@ use ratatui::{
 };
 use serde_json::{Value, json};
 use std::{
+    cell::Cell,
     fs::{self, File, OpenOptions},
     io::{self, IsTerminal, Write},
+    os::unix::fs::MetadataExt,
     path::PathBuf,
     process::Command,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -167,11 +169,31 @@ fn repo_valid(repo: &str) -> bool {
                     .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
         })
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct BoardStamp {
+    device: u64,
+    inode: u64,
+    length: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+impl BoardStamp {
+    fn of(metadata: &fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            length: metadata.len(),
+            modified: (metadata.mtime(), metadata.mtime_nsec()),
+            changed: (metadata.ctime(), metadata.ctime_nsec()),
+        }
+    }
+}
 struct Store {
     dir: PathBuf,
     data: Value,
     _lock: File,
     catalog: governance::Catalog,
+    stamp: Cell<Option<BoardStamp>>,
 }
 impl Drop for Store {
     fn drop(&mut self) {
@@ -214,15 +236,33 @@ impl Store {
             dir,
             data,
             _lock: lock,
+            stamp: Cell::new(None),
             catalog,
         })
     }
     fn reload(&mut self) -> Result<()> {
+        self.load_board(false)
+    }
+    fn reload_if_changed(&mut self) -> Result<()> {
+        self.load_board(true)
+    }
+    fn load_board(&mut self, skip_unchanged: bool) -> Result<()> {
         let path = self.dir.join("board.json");
-        if !path.exists() {
+        let mut file = match File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                self.stamp.set(None);
+                return Ok(());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let stamp = BoardStamp::of(&file.metadata()?);
+        if skip_unchanged && self.stamp.get() == Some(stamp) {
             return Ok(());
         }
-        let data: Value = serde_json::from_slice(&fs::read(path)?)?;
+        let mut bytes = Vec::new();
+        io::Read::read_to_end(&mut file, &mut bytes)?;
+        let data: Value = serde_json::from_slice(&bytes)?;
         ensure!(
             data["version"] == 1 && data["tasks"].is_array() && data["repositories"].is_array(),
             "Invalid cached board"
@@ -235,14 +275,26 @@ impl Store {
         };
         self.catalog = local::catalog(catalog, &data)?;
         self.data = data;
+        self.stamp.set(Some(stamp));
         Ok(())
     }
     fn save(&self) -> Result<()> {
+        // A failed save must let the next UI reload discard unsaved mutations.
+        self.stamp.set(None);
         let mut file = tempfile::NamedTempFile::new_in(&self.dir)?;
-        serde_json::to_writer_pretty(&mut file, &self.data)?;
-        file.write_all(b"\n")?;
+        {
+            let mut writer = io::BufWriter::new(file.as_file_mut());
+            serde_json::to_writer_pretty(&mut writer, &self.data)?;
+            writer.write_all(b"\n")?;
+            writer.flush()?;
+        }
         file.as_file().sync_all()?;
-        file.persist(self.dir.join("board.json"))?;
+        let file = file.persist(self.dir.join("board.json"))?;
+        self.stamp.set(
+            file.metadata()
+                .ok()
+                .map(|metadata| BoardStamp::of(&metadata)),
+        );
         Ok(())
     }
     fn tasks(&self) -> &[Value] {
@@ -279,6 +331,7 @@ fn touch(t: &mut Value, message: &str) {
     }
 }
 fn collar(repo: &str, kind: &str) -> Result<Vec<Value>> {
+    let _permit = shared::background_read_permit()?;
     ensure!(repo_valid(repo), "Use owner/repository");
     let output = collar_command()
         .args([
@@ -339,8 +392,7 @@ fn todos(body: &str) -> Vec<Value> {
 }
 fn sync(store: &mut Store, repo: &str) -> Result<()> {
     let read_started = now();
-    let issues = shared::issues(repo)?;
-    let prs = collar(repo, "pr")?;
+    let (issues, prs) = shared::snapshot(repo)?;
     import_snapshot(store, repo, &issues, &prs, &read_started)
 }
 fn import_snapshot(
@@ -428,7 +480,19 @@ fn import_snapshot(
     Ok(())
 }
 fn import_records(store: &mut Store, repo: &str, issues: &[Value], prs: &[Value]) -> Result<()> {
-    let mut next = store.data.clone();
+    let next = merged_records(&store.data, repo, issues, prs)?;
+    replace_board(store, next)
+}
+fn replace_board(store: &mut Store, next: Value) -> Result<()> {
+    let previous = std::mem::replace(&mut store.data, next);
+    if let Err(error) = store.save() {
+        store.data = previous;
+        return Err(error);
+    }
+    Ok(())
+}
+fn merged_records(data: &Value, repo: &str, issues: &[Value], prs: &[Value]) -> Result<Value> {
+    let mut next = data.clone();
     if !next["repositories"]
         .as_array()
         .context("Invalid repositories")?
@@ -440,17 +504,36 @@ fn import_records(store: &mut Store, repo: &str, issues: &[Value], prs: &[Value]
             .context("Invalid repositories")?
             .push(json!({"name":repo}))
     }
+    let mut indices = std::collections::BTreeMap::new();
+    for (i, task) in next["tasks"]
+        .as_array()
+        .context("Invalid tasks")?
+        .iter()
+        .enumerate()
+    {
+        if let Some(id) = task["source"]["id"].as_str() {
+            indices.entry(id.to_owned()).or_insert(i);
+        }
+    }
+    let mut previous_tasks = std::collections::BTreeMap::new();
+    for task in data["tasks"].as_array().context("Invalid tasks")? {
+        if let Some(id) = task["id"].as_str() {
+            previous_tasks.entry(id).or_insert(task);
+        }
+    }
     for (kind, records) in [("issue", issues), ("pr", prs)] {
         for record in records {
             let number = record["number"].as_u64().context("Missing record number")?;
             let source_id = format!("{repo}:{kind}:{number}");
             let tasks = next["tasks"].as_array_mut().context("Invalid tasks")?;
-            let index = tasks.iter().position(|t| t["source"]["id"] == source_id);
+            let index = indices.get(&source_id).copied();
             let i = match index {
                 Some(i) => i,
                 None => {
                     tasks.push(json!({"id":format!("gcd:{source_id}"),"revision":0,"priority":"normal","owner":"","events":[],"proposals":[],"claim":null}));
-                    tasks.len() - 1
+                    let index = tasks.len() - 1;
+                    indices.insert(source_id.clone(), index);
+                    index
                 }
             };
             let t = &mut tasks[i];
@@ -527,7 +610,7 @@ fn import_records(store: &mut Store, repo: &str, issues: &[Value], prs: &[Value]
         if task["repo"] != repo || task["source"].is_null() {
             continue;
         }
-        let previous = store.tasks().iter().find(|old| old["id"] == task["id"]);
+        let previous = previous_tasks.get(string(task, "id")).copied();
         let unchanged = previous.is_some_and(|previous| {
             ["title", "body", "owner", "priority", "stage"]
                 .iter()
@@ -543,14 +626,9 @@ fn import_records(store: &mut Store, repo: &str, issues: &[Value], prs: &[Value]
             object.remove("retiredAt");
         }
     }
-    let previous = std::mem::replace(&mut store.data, next);
-    if let Err(error) = store.save() {
-        store.data = previous;
-        return Err(error);
-    }
-
-    Ok(())
+    Ok(next)
 }
+
 fn brief(store: &Store, id: &str) -> Result<Value> {
     let mut t = store
         .tasks()

@@ -9,7 +9,7 @@
   inputs = {
     scottylabs.url = "git+https://git.cmu.dev/ScottyLabs/kennel";
     collar = {
-      url = "git+https://git.cmu.dev/ScottyLabs/collar?ref=fix/governance-schema&rev=4e46cbee16d048af1c2179740893704be0b7b5c3";
+      url = "git+https://git.cmu.dev/ScottyLabs/collar?ref=main&rev=6da152940ca6b9d325bd27424c40496e7fb1acad";
       inputs = {
         scottylabs.follows = "scottylabs";
         nixpkgs.follows = "nixpkgs";

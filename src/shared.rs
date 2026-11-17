@@ -1,5 +1,93 @@
 use crate::*;
 use std::process::Stdio;
+use std::sync::{Condvar, Mutex};
+
+const READ_WORKERS: usize = 4;
+static READS: (Mutex<(usize, usize)>, Condvar) = (Mutex::new((0, 0)), Condvar::new());
+pub(crate) struct ReadPermit {
+    background: bool,
+}
+pub(crate) fn read_permit() -> Result<ReadPermit> {
+    permit(false)
+}
+pub(crate) fn background_read_permit() -> Result<ReadPermit> {
+    permit(true)
+}
+fn permit(background: bool) -> Result<ReadPermit> {
+    let mut count = READS
+        .0
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Read scheduler unavailable"))?;
+    while count.0 >= READ_WORKERS || (background && count.1 >= READ_WORKERS - 1) {
+        count = READS
+            .1
+            .wait(count)
+            .map_err(|_| anyhow::anyhow!("Read scheduler unavailable"))?;
+    }
+    count.0 += 1;
+    if background {
+        count.1 += 1;
+    }
+    Ok(ReadPermit { background })
+}
+impl Drop for ReadPermit {
+    fn drop(&mut self) {
+        if let Ok(mut count) = READS.0.lock() {
+            count.0 -= 1;
+            if self.background {
+                count.1 -= 1;
+            }
+            READS.1.notify_all();
+        }
+    }
+}
+
+pub(crate) fn parallel_reads<T: Send, R: Send>(
+    items: Vec<T>,
+    read: impl Fn(T) -> R + Sync,
+) -> Result<Vec<R>> {
+    let workers = items.len().min(READ_WORKERS);
+    let queue = Mutex::new(items.into_iter().enumerate());
+    std::thread::scope(|scope| {
+        let handles = (0..workers)
+            .map(|_| {
+                scope.spawn(|| -> Result<Vec<_>> {
+                    let mut results = Vec::new();
+                    loop {
+                        let item = queue
+                            .lock()
+                            .map_err(|_| anyhow::anyhow!("Read queue unavailable"))?
+                            .next();
+                        let Some((index, item)) = item else { break };
+                        results.push((index, read(item)));
+                    }
+                    Ok(results)
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut results = Vec::new();
+        for handle in handles {
+            results.extend(
+                handle
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("Read worker panicked"))??,
+            );
+        }
+        results.sort_by_key(|(index, _)| *index);
+        Ok(results.into_iter().map(|(_, result)| result).collect())
+    })
+}
+
+pub(crate) fn snapshot(repo: &str) -> Result<(Vec<Value>, Vec<Value>)> {
+    std::thread::scope(|scope| {
+        let issues = scope.spawn(|| issues(repo));
+        let prs = collar(repo, "pr");
+        let issues = issues
+            .join()
+            .map_err(|_| anyhow::anyhow!("Issue reader panicked"))??;
+        Ok((issues, prs?))
+    })
+}
 
 fn collect_pages(
     mut read: impl FnMut(usize) -> Result<Vec<Value>>,
@@ -21,12 +109,31 @@ fn collect_pages(
     bail!("Pagination did not terminate")
 }
 pub(crate) fn list(path: &str, fields: &[(&str, &str)], maximum: usize) -> Result<Vec<Value>> {
+    list_read(path, fields, maximum, false)
+}
+pub(crate) fn background_list(
+    path: &str,
+    fields: &[(&str, &str)],
+    maximum: usize,
+) -> Result<Vec<Value>> {
+    list_read(path, fields, maximum, true)
+}
+fn list_read(
+    path: &str,
+    fields: &[(&str, &str)],
+    maximum: usize,
+    background: bool,
+) -> Result<Vec<Value>> {
     collect_pages(
         |page| {
             let page = page.to_string();
             let mut query = fields.to_vec();
             query.extend([("page", page.as_str()), ("limit", "50")]);
-            let response = governance::api(path, &query)?;
+            let response = if background {
+                governance::background_api(path, &query)
+            } else {
+                governance::api(path, &query)
+            }?;
             response
                 .as_array()
                 .cloned()
@@ -37,7 +144,7 @@ pub(crate) fn list(path: &str, fields: &[(&str, &str)], maximum: usize) -> Resul
 }
 pub(crate) fn issues(repo: &str) -> Result<Vec<Value>> {
     ensure!(repo_valid(repo), "Use owner/repository");
-    let records = list(
+    let records = background_list(
         &format!("repos/{repo}/issues"),
         &[("state", "all"), ("type", "issues"), ("sort", "oldest")],
         5000,
@@ -487,5 +594,44 @@ mod tests {
         let changed = json!({"title":"Changed","updated_at":"b"});
         assert!(verify(&initial, &changed).is_err());
         assert!(verify(&initial, &initial).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod concurrency_tests {
+    use super::*;
+    use std::sync::{
+        Arc, Barrier,
+        atomic::{AtomicUsize, Ordering},
+    };
+    #[test]
+    fn reads_overlap_with_a_bounded_shared_budget_and_keep_result_order() -> Result<()> {
+        let barrier = Arc::new(Barrier::new(READ_WORKERS));
+        let active = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let values = parallel_reads((0..8).collect(), |index| -> Result<_> {
+            let _permit = read_permit()?;
+            let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(current, Ordering::SeqCst);
+            barrier.wait();
+            active.fetch_sub(1, Ordering::SeqCst);
+            Ok(index)
+        })?;
+        assert_eq!(
+            values.into_iter().collect::<Result<Vec<_>>>()?,
+            (0..8).collect::<Vec<_>>()
+        );
+        assert_eq!(peak.load(Ordering::SeqCst), READ_WORKERS);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+        assert!(parallel_reads(Vec::<()>::new(), |_| ())?.is_empty());
+        let background = (0..READ_WORKERS - 1)
+            .map(|_| background_read_permit())
+            .collect::<Result<Vec<_>>>()?;
+        // Refresh workers leave a slot available for a discussion or write precondition read.
+        let foreground = read_permit()?;
+        drop(foreground);
+        drop(background);
+
+        Ok(())
     }
 }

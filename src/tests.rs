@@ -218,3 +218,55 @@ fn an_older_snapshot_cannot_undo_a_local_pr_state_refresh() -> Result<()> {
     assert_eq!(store.tasks()[0]["source"]["state"], "CLOSED");
     Ok(())
 }
+
+#[test]
+fn unchanged_reload_skips_parsing_but_atomic_replacements_are_seen() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let mut store = Store::open(directory.path().into())?;
+    store.add("first", None, "")?;
+    store.save()?;
+    store.reload_if_changed()?;
+    let pointer = store.tasks().as_ptr();
+    store.reload_if_changed()?;
+    assert_eq!(pointer, store.tasks().as_ptr());
+    let mut replacement = store.data.clone();
+    replacement["tasks"][0]["title"] = json!("other");
+    let mut file = tempfile::NamedTempFile::new_in(directory.path())?;
+    serde_json::to_writer(&mut file, &replacement)?;
+    file.persist(directory.path().join("board.json"))?;
+    store.reload_if_changed()?;
+    assert_eq!(store.tasks()[0]["title"], "other");
+    store.data["tasks"][0]["title"] = json!("unsaved");
+    store.reload()?;
+    assert_eq!(store.tasks()[0]["title"], "other");
+    Ok(())
+}
+
+#[test]
+fn invalid_atomic_replacement_is_not_marked_as_loaded() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let mut store = Store::open(directory.path().into())?;
+    store.add("retained", None, "")?;
+    store.save()?;
+    fs::write(directory.path().join("board.json"), b"invalid")?;
+    assert!(store.reload_if_changed().is_err());
+    assert!(store.reload_if_changed().is_err());
+    assert_eq!(store.tasks()[0]["title"], "retained");
+    Ok(())
+}
+
+#[test]
+fn failed_save_invalidates_the_idle_reload_stamp() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let mut store = Store::open(directory.path().into())?;
+    store.add("saved", None, "")?;
+    store.save()?;
+    store.reload_if_changed()?;
+    store.data["tasks"][0]["title"] = json!("unsaved");
+    store.dir = directory.path().join("missing-parent");
+    assert!(store.save().is_err());
+    store.dir = directory.path().into();
+    store.reload_if_changed()?;
+    assert_eq!(store.tasks()[0]["title"], "saved");
+    Ok(())
+}

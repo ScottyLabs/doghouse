@@ -28,6 +28,7 @@ enum Job {
     Commented(String, Result<Value>),
     StateChanged(String, String, Result<Value>),
     Personal(Result<personal::Snapshot>),
+    SyncFailed(anyhow::Error),
 }
 fn refresh_failure(repository: &str, error: &anyhow::Error) -> String {
     let detail = format!("{error:#}");
@@ -440,16 +441,13 @@ impl Ui {
         self.message = "Refreshing GCD; you can keep working".into();
         let sender = sender.clone();
         std::thread::spawn(move || {
-            for repo in repos {
+            let result = shared::parallel_reads(repos, |repo| {
                 let read_started = now();
-                let result = shared::issues(&repo)
-                    .and_then(|issues| collar(&repo, "pr").map(|prs| (issues, prs)));
-                if sender
-                    .send(Job::Snapshot(repo, read_started, result))
-                    .is_err()
-                {
-                    break;
-                }
+                let result = shared::snapshot(&repo);
+                let _ = sender.send(Job::Snapshot(repo, read_started, result));
+            });
+            if let Err(error) = result {
+                let _ = sender.send(Job::SyncFailed(error));
             }
         });
         Ok(())
@@ -672,7 +670,7 @@ fn run_ui(
         FileExt::unlock(&store._lock)?;
         let pending = event::poll(Duration::from_millis(150));
         FileExt::lock_exclusive(&store._lock)?;
-        store.reload()?;
+        store.reload_if_changed()?;
         while let Ok(job) = receiver.try_recv() {
             let result = (|| -> Result<()> {
                 match job {
@@ -717,6 +715,10 @@ fn run_ui(
                                 ui.start_sync(store, &sender)?;
                             }
                         }
+                    }
+                    Job::SyncFailed(error) => {
+                        ui.syncing = 0;
+                        return Err(error);
                     }
                     Job::Snapshot(repo, read_started, result) => {
                         ui.syncing = ui.syncing.saturating_sub(1);

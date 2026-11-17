@@ -116,6 +116,17 @@ pub(crate) fn parse_team(value: &Value) -> Result<Workspace> {
     })
 }
 pub(crate) fn api(path: &str, fields: &[(&str, &str)]) -> Result<Value> {
+    api_read(path, fields, false)
+}
+pub(crate) fn background_api(path: &str, fields: &[(&str, &str)]) -> Result<Value> {
+    api_read(path, fields, true)
+}
+fn api_read(path: &str, fields: &[(&str, &str)], background: bool) -> Result<Value> {
+    let _permit = if background {
+        shared::background_read_permit()?
+    } else {
+        shared::read_permit()?
+    };
     let mut command = collar_command();
     command.args([
         "--host",
@@ -139,6 +150,7 @@ pub(crate) fn api(path: &str, fields: &[(&str, &str)]) -> Result<Value> {
     serde_json::from_slice(&output.stdout).context("Invalid Collar API JSON")
 }
 pub(crate) fn discover() -> Result<Catalog> {
+    let _permit = shared::background_read_permit()?;
     let output = collar_command()
         .args([
             "--host",
