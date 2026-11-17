@@ -86,3 +86,7 @@ In Agents, Enter opens the native conversation, Ctrl+Z returns from that CLI to 
 Task descriptions, discussion comments, and automated results render CommonMark structure: headings, emphasis, inline/fenced code, nested lists, checkboxes, quotes, links, and tables. Hidden HTML comments stay hidden; editing still uses the original Markdown source. Tables fit the preview width, with long cells shortened visibly. Colors follow the terminal palette.
 
 Letter shortcuts ignore Ctrl/Alt modifiers unless explicitly documented; Ctrl+Z cannot accidentally invoke `z` close/reopen in Shepherd. `+` adds a directory project, freeing lowercase `c` for comments. Uppercase `C` remains a comment alias.
+
+Pickers use Up/Down or j/k to select, Home/End to jump, and `/` to enter filter text. In filter mode every letter, including j/k, is searchable; arrows and Ctrl+N/P still move the selection. Esc leaves filter mode, then closes the picker. Enter chooses the highlighted item. The footer shows these controls.
+
+Text editors and agent goals also support Ctrl+A/E (start/end), Ctrl+U/K (delete before/after the cursor), and Ctrl+W (delete the previous word). Home/End selects the first/last task or run, and Ctrl+D/U pages down/up; task editing shortcuts stay scoped to the task view. Every Shepherd window using the same cache can open a native conversation with Enter. Ctrl+Z detaches only that terminal client; other attached windows keep their conversation open.

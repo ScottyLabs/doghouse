@@ -46,7 +46,6 @@ impl Drop for NativeProcess {
 }
 pub(super) struct Console {
     socket: PathBuf,
-    _temporary: tempfile::TempDir,
     _leases: Vec<Lease>,
 }
 impl Console {
@@ -80,11 +79,27 @@ impl Console {
 impl Drop for Console {
     fn drop(&mut self) {
         let _ = self.command().arg("kill-server").output();
+        let _ = fs::remove_file(&self.socket);
     }
 }
 impl Manager {
     pub fn is_detached(&self, id: &str) -> bool {
-        self.consoles.contains_key(id)
+        self.console_available(id)
+    }
+    fn console_socket(&self, id: &str) -> PathBuf {
+        self.root.join(id).join("terminal.socket")
+    }
+    fn attach_command(&self, id: &str) -> Command {
+        let mut command = Command::new("tmux");
+        command
+            .arg("-S")
+            .arg(self.console_socket(id))
+            .env_remove("TMUX")
+            .args(["attach-session", "-t", "agent"]);
+        command
+    }
+    pub(super) fn console_available(&self, id: &str) -> bool {
+        valid_id(id) && self.console_socket(id).exists()
     }
     pub(super) fn poll_consoles(&mut self) -> Result<()> {
         let finished = self
@@ -128,7 +143,8 @@ impl Manager {
         );
         let terminal = TerminalOwner::open()?;
         let mut run = self.read_record(id)?;
-        if !self.consoles.contains_key(id) {
+        let shared = self.console_available(id) && !self.consoles.contains_key(id);
+        if !self.console_available(id) {
             ensure!(
                 !run.state.active() && run.state != State::Unattached,
                 "This run is owned by another window"
@@ -152,17 +168,10 @@ impl Manager {
             ensure!(run.directory.is_dir(), "This checkout no longer exists");
             let native =
                 backend::interactive_command(&run, &self.executables[run.provider.index()])?;
-            let temporary = tempfile::Builder::new()
-                .prefix("shepherd-console-")
-                .tempdir()?;
-            let config = temporary.path().join("tmux.conf");
-            fs::write(
-                &config,
-                "set -g status off\nset -g prefix None\nset -g history-limit 2000\nset -g remain-on-exit on\nset -g destroy-unattached off\nbind-key -n C-z detach-client\n",
-            )?;
+            let config = self.root.join(id).join("tmux.conf");
+            write_console_config(&config, b"set -g status off\nset -g prefix None\nset -g history-limit 2000\nset -g remain-on-exit on\nset -g destroy-unattached off\nbind-key -n C-z detach-client\n")?;
             let console = Console {
-                socket: temporary.path().join("socket"),
-                _temporary: temporary,
+                socket: self.console_socket(id),
                 _leases: leases,
             };
             let (width, height) = crossterm::terminal::size()?;
@@ -178,21 +187,18 @@ impl Manager {
             );
             self.consoles.insert(id.into(), console);
         }
-        run.state = State::Running;
-        run.native_continued = true;
-        run.event(
-            "Conversation",
-            "Opened native CLI; Ctrl+Z detaches while work continues",
-        );
-        self.runs.insert(id.into(), run);
-        self.persist(id)?;
-        let console = self
-            .consoles
-            .get(id)
-            .context("Native terminal disappeared")?;
-        let child = console
-            .command()
-            .args(["attach-session", "-t", "agent"])
+        if !shared {
+            run.state = State::Running;
+            run.native_continued = true;
+            run.event(
+                "Conversation",
+                "Opened native CLI; Ctrl+Z detaches while work continues",
+            );
+            self.runs.insert(id.into(), run);
+            self.persist(id)?;
+        }
+        let child = self
+            .attach_command(id)
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -213,7 +219,7 @@ impl Manager {
                     Ok(WaitStatus::Exited(_, code)) => {
                         client.child.take();
                         ensure!(
-                            code == 0 || !self.consoles.contains_key(id),
+                            code == 0 || !self.console_available(id),
                             "Native terminal attachment exited with status {code}; the agent remains in the background. Press Enter to retry"
                         );
                         break;
@@ -238,7 +244,7 @@ impl Manager {
         })();
         self.interactive = None;
         self.poll_consoles()?;
-        if self.consoles.contains_key(id) {
+        if !shared && self.consoles.contains_key(id) {
             if let Some(run) = self.runs.get_mut(id) {
                 run.state = State::Detached;
                 run.event("Conversation", "Detached; agent continues in background. Enter returns to the same terminal; s stops it.");
@@ -246,5 +252,116 @@ impl Manager {
             self.persist(id)?;
         }
         result
+    }
+}
+
+fn write_console_config(path: &std::path::Path, content: &[u8]) -> Result<()> {
+    let mut file =
+        tempfile::NamedTempFile::new_in(path.parent().context("Missing console directory")?)?;
+    file.write_all(content)?;
+    file.persist(path)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_discover_and_stop_the_same_terminal() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let mut owner = Manager::open(temporary.path())?;
+        let run = Run::fixture(Provider::Codex);
+        fs::create_dir_all(owner.root.join(&run.id))?;
+        owner.runs.insert(run.id.clone(), run.clone());
+        owner.persist(&run.id)?;
+        let console = Console {
+            socket: owner.console_socket(&run.id),
+            _leases: vec![lease(&owner.root, "test-terminal")?],
+        };
+        let output = console
+            .command()
+            .args([
+                "-f",
+                "/dev/null",
+                "new-session",
+                "-d",
+                "-s",
+                "agent",
+                "--",
+                "sleep",
+                "30",
+            ])
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "Start fixture tmux: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        owner.consoles.insert(run.id.clone(), console);
+        let mut viewer = Manager::open(temporary.path())?;
+        assert!(viewer.is_detached(&run.id));
+        assert_eq!(viewer.get(&run.id)?.state, State::Running);
+        let first_tty = nix::pty::openpty(None, None)?;
+        let second_tty = nix::pty::openpty(None, None)?;
+        let attach = |manager: &Manager, slave: std::os::fd::OwnedFd| -> Result<NativeProcess> {
+            let slave = File::from(slave);
+            let child = manager
+                .attach_command(&run.id)
+                .env("TERM", "xterm-256color")
+                .stdin(slave.try_clone()?)
+                .stdout(slave.try_clone()?)
+                .stderr(slave)
+                .process_group(0)
+                .spawn()?;
+            let group = Pid::from_raw(i32::try_from(child.id())?);
+            Ok(NativeProcess {
+                child: Some(child),
+                group,
+            })
+        };
+        let first = attach(&owner, first_tty.slave)?;
+        let second = attach(&viewer, second_tty.slave)?;
+        let clients = || -> Result<Vec<String>> {
+            let output = owner.consoles[&run.id]
+                .command()
+                .args(["list-clients", "-F", "#{client_name}"])
+                .output()?;
+            ensure!(output.status.success(), "List fixture clients");
+            Ok(String::from_utf8(output.stdout)?
+                .lines()
+                .map(str::to_owned)
+                .collect())
+        };
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while clients()?.len() < 2 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            clients()?.len(),
+            2,
+            "Both windows should attach simultaneously"
+        );
+        drop(first);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while clients()?.len() != 1 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            clients()?.len(),
+            1,
+            "Detaching one client retains the other"
+        );
+        drop(second);
+        drop(viewer);
+        assert!(owner.consoles[&run.id].status()?.is_none());
+        viewer = Manager::open(temporary.path())?;
+        viewer.stop(&run.id)?;
+        owner.poll()?;
+        viewer.refresh_external()?;
+        assert_eq!(viewer.get(&run.id)?.state, State::Stopped);
+        assert!(!viewer.is_detached(&run.id));
+        assert!(!owner.root.join(&run.id).join("stop-request").exists());
+        Ok(())
     }
 }

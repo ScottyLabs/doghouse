@@ -9,6 +9,7 @@ enum PickKind {
     Source,
 }
 struct Picker {
+    searching: bool,
     kind: PickKind,
     row: usize,
     query: String,
@@ -391,6 +392,7 @@ impl Ui {
     }
     fn open_picker(&mut self, kind: PickKind) {
         self.picker = Some(Picker {
+            searching: false,
             kind,
             row: if matches!(kind, PickKind::Source) {
                 self.source
@@ -622,9 +624,10 @@ fn run_ui(
             terminal.clear()?;
         }
         if let Some(id) = ui.handoff.clone()
-            && manager
-                .get(&id)
-                .is_ok_and(|run| !run.state.active() || manager.is_detached(&id))
+            && manager.get(&id).is_ok_and(|run| {
+                (!run.state.active() && run.state != crate::agents::State::Unattached)
+                    || manager.is_detached(&id)
+            })
         {
             ui.handoff = None;
             FileExt::unlock(&store._lock)?;

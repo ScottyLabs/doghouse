@@ -2,7 +2,7 @@
 
 ## Codex and Claude Code
 
-Select a task and press `A`. Type an optional goal and press Enter; an empty goal uses the task itself. Shepherd selects an installed CLI and the project's known checkout. Tab opens secondary settings for the agent, task mode, and directory; Left/Right changes options, Enter returns to the goal, and Esc cancels. Ctrl+S is an alternative launch key. Pasting multiline goals does not submit them.
+Select a task and press `A`. Type an optional goal and press Enter; an empty goal uses the task itself. Shepherd selects an installed CLI and the project's known checkout. Tab opens secondary settings for the agent, task mode, and directory; Left/Right changes options, Enter returns to the goal, and Esc cancels. Ctrl+S is an alternative launch key. Alt+Enter or Shift+Enter inserts a goal newline where supported by the terminal. Pasting multiline goals does not submit them.
 
 For shared tasks, the checkout must have a Git remote matching the repository. Local tasks use their registered directory. Git-backed issue tasks default to implementation in a separate checkout; PRs and plain directories default to planning. The last available backend is remembered; native CLI model and login settings are retained.
 
@@ -17,9 +17,10 @@ Shepherd invokes the installed native CLI with its existing login and model conf
 | -- | -- |
 | A / n | New run for the selected task |
 | r | Resume the native session with a follow-up goal |
-| s | Stop this window's agent and its child tools |
+| s | Stop the selected agent and its child tools, including in another window |
 | Enter | Open or resume the native Codex/Claude conversation |
 | Ctrl+Z (inside CLI) | Return to Shepherd, keeping the same native process |
+| Home / End | First / last run (Home also resets preview scrolling) |
 | v | Switch between activity and the last automated result |
 | Delete / D | Confirm deletion of finished run history and transcript |
 | d | Review implementation status and diff |
@@ -29,7 +30,7 @@ Shepherd invokes the installed native CLI with its existing login and model conf
 | t / O | Return to the task / open its GCD issue |
 | a / Esc | Return to tasks |
 
-Enter takes you into the real native CLI in the same terminal. Ctrl+Z detaches from the CLI and returns to Shepherd while the agent keeps working. Enter reattaches to the same process, including its in-memory draft. A private tmux terminal preserves the screen and runs independently of the visible conversation; packaged Shepherd includes tmux. Exiting the CLI also returns to Shepherd. Other background agents continue being polled. Opening a still-running automated turn first asks to stop that turn and take over its session. The owning Shepherd window retains the checkout and task locks while a native session is detached; `s` stops it.
+Enter takes you into the real native CLI in the same terminal. Ctrl+Z detaches from the CLI and returns to Shepherd while the agent keeps working. Enter reattaches to the same process, including its in-memory draft. A tmux terminal in the private user cache preserves the screen and runs independently of the visible conversation; packaged Shepherd includes tmux. Exiting the CLI also returns to Shepherd. Other background agents continue being polled. Opening a still-running automated turn first asks to stop that turn and take over its session. Every Shepherd instance using the same user cache can attach to that terminal, including simultaneously, without restarting the CLI. Background takeover and `s` send a local stop request to the owning window, which signals only that agent's process group. The owning window retains checkout and task locks; closing it still stops its agents. Separate `--data-dir` caches and other machines do not share terminals.
 
 After an interactive conversation, the saved automated result is labeled as historical and cannot be published as a fresh result. An automated follow-up with `r` can produce a new publishable result. Native session history remains available through Enter.
 

@@ -106,12 +106,14 @@ fn contents(ui: &Ui) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
             &mut left,
             "MANAGE",
             &[
-                ("j / k", "Choose a run"),
+                ("Up/Down / j/k", "Choose a run"),
+                ("Home / End", "First / last run"),
+                ("Ctrl+D / U", "Scroll preview down / up"),
                 ("Enter", "Open native conversation"),
                 ("Ctrl+Z", "Return to Shepherd"),
                 ("v", "Activity / result"),
                 ("r", "Automated follow-up"),
-                ("s", "Stop the owned process group"),
+                ("s", "Stop the selected agent"),
                 ("f", "Current project / all runs"),
             ],
         );

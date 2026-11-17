@@ -198,8 +198,15 @@ pub(super) fn key(
                 };
             }
             KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => submit = true,
-            KeyCode::Enter if form.field == 3 => submit = true,
-            KeyCode::Enter => {
+            KeyCode::Enter
+                if form.field == 3
+                    && !key
+                        .modifiers
+                        .intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) =>
+            {
+                submit = true
+            }
+            KeyCode::Enter if form.field != 3 => {
                 form.field = 3;
                 form.settings = false;
                 form.cursor = form.goal.chars().count();
@@ -237,13 +244,11 @@ pub(super) fn key(
                 };
                 let mut chars = text.chars().collect::<Vec<_>>();
                 form.cursor = form.cursor.min(chars.len());
+                let edited = actions::shell_edit(&mut chars, &mut form.cursor, key);
                 match key.code {
+                    _ if edited => {}
                     KeyCode::Left => form.cursor = form.cursor.saturating_sub(1),
                     KeyCode::Right => form.cursor = (form.cursor + 1).min(chars.len()),
-                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        chars.clear();
-                        form.cursor = 0;
-                    }
                     KeyCode::Home => form.cursor = 0,
                     KeyCode::End => form.cursor = chars.len(),
                     KeyCode::Backspace if form.cursor > 0 => {
@@ -320,6 +325,19 @@ pub(super) fn key(
         }
         return Ok(true);
     }
+    if ui.agent_view && key.modifiers == KeyModifiers::CONTROL {
+        match key.code {
+            KeyCode::Char('d') => {
+                ui.run_scroll = ui.run_scroll.saturating_add(6);
+                return Ok(true);
+            }
+            KeyCode::Char('u') => {
+                ui.run_scroll = ui.run_scroll.saturating_sub(6);
+                return Ok(true);
+            }
+            _ => {}
+        }
+    }
     if key
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
@@ -366,6 +384,14 @@ pub(super) fn key(
                 ui.run_scroll = 0;
             }
         }
+        KeyCode::Home => {
+            ui.run_row = 0;
+            ui.run_scroll = 0;
+        }
+        KeyCode::End if ui.agent_diff.is_none() => {
+            ui.run_row = ui.visible_runs(store).len().saturating_sub(1);
+            ui.run_scroll = 0;
+        }
         KeyCode::PageDown => ui.run_scroll = ui.run_scroll.saturating_add(12),
         KeyCode::PageUp => ui.run_scroll = ui.run_scroll.saturating_sub(12),
         KeyCode::Char('n') => launch(ui, store, manager, None)?,
@@ -376,7 +402,7 @@ pub(super) fn key(
         KeyCode::Char('s') => {
             let run = selected_run(ui, store)?;
             manager.stop(&run.id)?;
-            ui.message = "Stopping the selected agent and its tools".into();
+            ui.message = "Requested stop for the selected agent and its tools".into();
         }
         KeyCode::Char('f') => {
             ui.run_all = !ui.run_all;
@@ -464,11 +490,9 @@ pub(super) fn key(
                 run.session_id.is_some(),
                 "This run has no native session. Press A to start a new agent"
             );
-            ensure!(
-                run.state != crate::agents::State::Unattached,
-                "Open this active conversation from its owning Shepherd window"
-            );
-            if run.state.active() && !manager.is_detached(&run.id) {
+            if (run.state.active() || run.state == crate::agents::State::Unattached)
+                && !manager.is_detached(&run.id)
+            {
                 ui.take_over = Some(run.id);
             } else {
                 ui.handoff = Some(run.id);
@@ -502,7 +526,8 @@ pub(super) fn key(
             ui.publish_run = Some(run.id);
             ui.run_scroll = 0;
         }
-        _ => return Ok(false),
+        KeyCode::Char('q' | '?' | '!') => return Ok(false),
+        _ => {}
     }
     Ok(true)
 }
@@ -510,6 +535,116 @@ pub(super) fn key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn modified_enter_adds_goal_lines_without_launching() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let mut store = Store::open(temporary.path().into())?;
+        let mut manager = Manager::open(&store.dir)?;
+        let (sender, _receiver) = mpsc::channel();
+        let mut ui = Ui {
+            launch: Some(Launch {
+                task: Value::Null,
+                provider: Provider::Codex,
+                mode: Mode::Plan,
+                checkout: String::new(),
+                goal: "goal".into(),
+                field: 3,
+                cursor: 4,
+                resume: None,
+                settings: false,
+            }),
+            ..Ui::default()
+        };
+        for modifier in [KeyModifiers::ALT, KeyModifiers::SHIFT] {
+            key(
+                &mut ui,
+                &mut store,
+                KeyEvent::new(KeyCode::Enter, modifier),
+                &sender,
+                &mut manager,
+            )?;
+        }
+        assert_eq!(
+            ui.launch.as_ref().map(|form| form.goal.as_str()),
+            Some("goal\n\n")
+        );
+        assert_eq!(manager.active_count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn agents_view_keeps_task_actions_scoped() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let mut store = Store::open(temporary.path().into())?;
+        let mut manager = Manager::open(&store.dir)?;
+        let (sender, _receiver) = mpsc::channel();
+        let mut ui = Ui {
+            agent_view: true,
+            ..Ui::default()
+        };
+        for code in [
+            KeyCode::Char('c'),
+            KeyCode::Char('e'),
+            KeyCode::Tab,
+            KeyCode::Char('z'),
+        ] {
+            assert!(key(
+                &mut ui,
+                &mut store,
+                KeyEvent::new(code, KeyModifiers::NONE),
+                &sender,
+                &mut manager
+            )?);
+            assert!(ui.prompt.is_none());
+            assert!(ui.confirm_state.is_none());
+        }
+        for code in [KeyCode::Char('?'), KeyCode::Char('q')] {
+            assert!(!key(
+                &mut ui,
+                &mut store,
+                KeyEvent::new(code, KeyModifiers::NONE),
+                &sender,
+                &mut manager
+            )?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn enter_requests_takeover_from_another_window() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let mut store = Store::open(temporary.path().into())?;
+        let mut manager = Manager::open(&store.dir)?;
+        let (sender, _receiver) = mpsc::channel();
+        let mut run = Run::fixture(Provider::Codex);
+        run.state = crate::agents::State::Unattached;
+        run.session_id = Some("native-session".into());
+        let mut ui = Ui {
+            agent_view: true,
+            run_all: true,
+            runs: vec![run.clone()],
+            ..Ui::default()
+        };
+        key(
+            &mut ui,
+            &mut store,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &sender,
+            &mut manager,
+        )?;
+        assert_eq!(ui.take_over.as_deref(), Some(run.id.as_str()));
+        assert!(ui.handoff.is_none());
+        key(
+            &mut ui,
+            &mut store,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &sender,
+            &mut manager,
+        )?;
+        assert!(ui.take_over.is_none());
+        Ok(())
+    }
+
     #[test]
     fn return_to_task_uses_source_and_identity() -> Result<()> {
         let temporary = tempfile::tempdir()?;

@@ -399,7 +399,7 @@ pub(super) fn overlays(ui: &Ui, f: &mut ratatui::Frame) {
                     if ui.error {
                         clean(ui.message.lines().next().unwrap_or_default())
                     } else {
-                        "Enter start agent / Tab settings / Esc cancel".into()
+                        "Enter start / Alt+Enter newline / Tab settings / Esc cancel".into()
                     },
                     if ui.error { Color::Red } else { BLUE },
                 )),
@@ -426,7 +426,7 @@ pub(super) fn overlays(ui: &Ui, f: &mut ratatui::Frame) {
                 Line::raw(""),
                 Line::raw("Stop the background turn and take over this conversation?"),
                 Line::from(label(
-                    "Progress and project files are retained. Exit the native CLI to return.",
+                    "Progress and files are retained. Ctrl+Z returns while work continues.",
                     MUTED,
                 )),
                 Line::raw(""),

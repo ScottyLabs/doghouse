@@ -1062,7 +1062,18 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
         f.render_widget(block(title, true), rect);
         f.render_widget(
             Paragraph::new(vec![
-                Line::from(label(format!("Filter: {}", clean(&picker.query)), BLUE)),
+                Line::from(label(
+                    format!(
+                        "{}: {}",
+                        if picker.searching {
+                            "Filter (typing)"
+                        } else {
+                            "Filter (/)"
+                        },
+                        clean(&picker.query)
+                    ),
+                    BLUE,
+                )),
                 Line::from(label(
                     if matches!(picker.kind, PickKind::Source) {
                         "Choose what appears on the board / Esc keeps the current view"
@@ -1102,7 +1113,7 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
             &mut state,
         );
         f.render_widget(
-            Paragraph::new("Arrows/j/k select  ·  Enter open  ·  Type to filter  ·  Esc cancel")
+            Paragraph::new("Up/Down or j/k: move | /: filter | Enter: choose | Esc: back")
                 .style(style(MUTED)),
             regions[2],
         );

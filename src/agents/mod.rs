@@ -94,7 +94,7 @@ impl State {
             Self::Failed => "Failed",
             Self::Stopped => "Stopped",
             Self::Attention => "Needs attention",
-            Self::Unattached => "Not attached",
+            Self::Unattached => "Running in another window",
         }
     }
     pub fn active(self) -> bool {
@@ -273,6 +273,7 @@ fn find_executable(name: &OsStr) -> Option<PathBuf> {
 }
 fn git(directory: &std::path::Path, args: &[&OsStr]) -> Result<String> {
     let output = Command::new("git")
+        .env_remove("GIT_INDEX_FILE")
         .arg("-C")
         .arg(directory)
         .args(args)
@@ -422,7 +423,7 @@ impl Manager {
                 valid_id(&run.id) && path.file_name() == Some(OsStr::new(&run.id)),
                 "Invalid agent record identity"
             );
-            if run.state.active() {
+            if run.state.active() && !path.join("terminal.socket").exists() {
                 run.state = State::Unattached;
                 run.event(
                     "Controller",
@@ -804,7 +805,7 @@ impl Manager {
                 Err(_) if !path.join("run.json").exists() => continue,
                 Err(error) => return Err(error),
             };
-            if run.state.active() {
+            if run.state.active() && !path.join("terminal.socket").exists() {
                 run.state = State::Unattached;
             }
             if run.publication == "publishing" {
@@ -816,6 +817,17 @@ impl Manager {
         Ok(())
     }
     pub fn poll(&mut self) -> Result<()> {
+        let requests = self
+            .active
+            .keys()
+            .chain(self.consoles.keys())
+            .filter(|id| self.root.join(id).join("stop-request").exists())
+            .cloned()
+            .collect::<Vec<_>>();
+        for id in requests {
+            self.stop(&id)?;
+            fs::remove_file(self.root.join(&id).join("stop-request"))?;
+        }
         if self.refreshed_at.elapsed() > Duration::from_secs(1) {
             self.poll_consoles()?;
             self.refresh_external()?;
@@ -926,6 +938,14 @@ impl Manager {
         std::mem::take(&mut self.terminal_reset)
     }
     pub fn stop(&mut self, id: &str) -> Result<()> {
+        if !self.active.contains_key(id) && !self.consoles.contains_key(id) {
+            let run = self.read_record(id)?;
+            ensure!(run.state.active(), "This agent is already stopped");
+            let mut request = tempfile::NamedTempFile::new_in(self.root.join(id))?;
+            request.write_all(b"stop\n")?;
+            request.persist(self.root.join(id).join("stop-request"))?;
+            return Ok(());
+        }
         if let Some(session) = self.consoles.remove(id) {
             drop(session);
             let run = self.runs.get_mut(id).context("Run disappeared")?;
@@ -1276,6 +1296,26 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         ensure!(manager.active_count() == 0, "Agent did not finish");
+        Ok(())
+    }
+    #[test]
+    fn another_window_can_request_background_takeover() -> Result<()> {
+        let (temporary, mut owner, source) = setup("sleep 30")?;
+        let id = owner.start(
+            &task(),
+            Provider::Codex,
+            Mode::Plan,
+            source,
+            "Inspect".into(),
+        )?;
+        let mut viewer = Manager::open(&temporary.path().join("cache"))?;
+        assert_eq!(viewer.get(&id)?.state, State::Unattached);
+        viewer.stop(&id)?;
+        finished(&mut owner)?;
+        viewer.refresh_external()?;
+        assert!(!viewer.get(&id)?.state.active());
+        assert_ne!(viewer.get(&id)?.state, State::Unattached);
+        assert!(!owner.root.join(id).join("stop-request").exists());
         Ok(())
     }
     const CODEX: &str = "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"native-session\"}' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"Reviewed the task\"}}' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":5,\"output_tokens\":3}}'\n";

@@ -1,6 +1,36 @@
 use super::*;
 use crossterm::event::KeyEvent;
 
+pub(super) fn shell_edit(chars: &mut Vec<char>, cursor: &mut usize, key: KeyEvent) -> bool {
+    if !key.modifiers.contains(KeyModifiers::CONTROL) || key.modifiers.contains(KeyModifiers::ALT) {
+        return false;
+    }
+    *cursor = (*cursor).min(chars.len());
+    match key.code {
+        KeyCode::Char('a') => *cursor = 0,
+        KeyCode::Char('e') => *cursor = chars.len(),
+        KeyCode::Char('u') => {
+            chars.drain(..*cursor);
+            *cursor = 0;
+        }
+        KeyCode::Char('k') => {
+            chars.truncate(*cursor);
+        }
+        KeyCode::Char('w') => {
+            let end = *cursor;
+            while *cursor > 0 && chars[*cursor - 1].is_whitespace() {
+                *cursor -= 1;
+            }
+            while *cursor > 0 && !chars[*cursor - 1].is_whitespace() {
+                *cursor -= 1;
+            }
+            chars.drain(*cursor..end);
+        }
+        _ => return false,
+    }
+    true
+}
+
 fn selected(ui: &Ui, store: &Store) -> Result<Value> {
     ui.selected(store).cloned().context("Select a task first")
 }
@@ -118,7 +148,7 @@ fn prompt(
             ui.row = ui
                 .visible(store)
                 .iter()
-                .filter(|task| task["stage"] == STAGES[ui.column])
+                .filter(|task| ui.my_work || task["stage"] == STAGES[ui.column])
                 .count()
                 .saturating_sub(1);
             ui.message = "Task saved in this local project".into();
@@ -177,6 +207,7 @@ pub(super) fn key(
             KeyCode::PageDown => ui.help_scroll = ui.help_scroll.saturating_add(8).min(limit),
             KeyCode::PageUp => ui.help_scroll = ui.help_scroll.saturating_sub(8),
             KeyCode::Home => ui.help_scroll = 0,
+            KeyCode::End => ui.help_scroll = limit,
             _ => {}
         }
         return Ok(false);
@@ -197,16 +228,33 @@ pub(super) fn key(
     if let Some(mut picker) = ui.picker.take() {
         let choices = ui.choices(store, picker.kind, &picker.query);
         match key.code {
+            KeyCode::Esc if picker.searching => picker.searching = false,
             KeyCode::Esc => return Ok(false),
-            KeyCode::Up | KeyCode::Char('k') => picker.row = picker.row.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Char('/') if !picker.searching => picker.searching = true,
+            KeyCode::Char('k') if !picker.searching => picker.row = picker.row.saturating_sub(1),
+            KeyCode::Char('j') if !picker.searching => {
                 picker.row = (picker.row + 1).min(choices.len().saturating_sub(1))
             }
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                picker.row = picker.row.saturating_sub(1)
+            }
+            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                picker.row = (picker.row + 1).min(choices.len().saturating_sub(1))
+            }
+            KeyCode::Up => picker.row = picker.row.saturating_sub(1),
+            KeyCode::Down => picker.row = (picker.row + 1).min(choices.len().saturating_sub(1)),
             KeyCode::Backspace => {
                 picker.query.pop();
                 picker.row = 0
             }
-            KeyCode::Char(c) => {
+            KeyCode::Home => picker.row = 0,
+            KeyCode::End => picker.row = choices.len().saturating_sub(1),
+            KeyCode::Char(c)
+                if picker.searching
+                    && !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
                 picker.query.push(c);
                 picker.row = 0
             }
@@ -291,9 +339,15 @@ pub(super) fn key(
     if let Some((mode, value)) = ui.prompt.take() {
         let mut chars = value.chars().collect::<Vec<_>>();
         ui.cursor = ui.cursor.min(chars.len());
-        let mut value = value;
+        let edited = shell_edit(&mut chars, &mut ui.cursor, key);
+        let mut value = if edited {
+            chars.iter().collect()
+        } else {
+            value
+        };
         let mut retain = true;
         match key.code {
+            _ if edited => {}
             KeyCode::Esc => {
                 if mode == '/' {
                     ui.query = ui.search_before.clone();
@@ -352,6 +406,27 @@ pub(super) fn key(
             ui.prompt = Some((mode, value));
         }
         return Ok(false);
+    }
+    if key.modifiers == KeyModifiers::CONTROL {
+        match key.code {
+            KeyCode::Char('d') => {
+                if ui.detail {
+                    ui.scroll = ui.scroll.saturating_add(6);
+                } else {
+                    ui.row = ui.row.saturating_add(6);
+                }
+                return Ok(false);
+            }
+            KeyCode::Char('u') => {
+                if ui.detail {
+                    ui.scroll = ui.scroll.saturating_sub(6);
+                } else {
+                    ui.row = ui.row.saturating_sub(6);
+                }
+                return Ok(false);
+            }
+            _ => {}
+        }
     }
     if key
         .modifiers
@@ -462,6 +537,18 @@ pub(super) fn key(
             ui.column = (ui.column + 1).min(4);
             ui.row = 0;
             ui.scroll = 0
+        }
+        KeyCode::Home => {
+            ui.row = 0;
+            ui.scroll = 0;
+        }
+        KeyCode::End if !ui.detail => {
+            ui.row = ui
+                .visible(store)
+                .iter()
+                .filter(|task| task["stage"] == STAGES[ui.column])
+                .count()
+                .saturating_sub(1);
         }
         KeyCode::Char('j') | KeyCode::Down => {
             if ui.detail {
@@ -663,6 +750,59 @@ pub(super) fn paste(ui: &mut Ui, text: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shell_editing_preserves_text_after_cursor() {
+        let mut chars = "one two tail".chars().collect::<Vec<_>>();
+        let mut cursor = 7;
+        assert!(shell_edit(
+            &mut chars,
+            &mut cursor,
+            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL)
+        ));
+        assert_eq!(chars.iter().collect::<String>(), "one  tail");
+        assert_eq!(cursor, 4);
+        shell_edit(
+            &mut chars,
+            &mut cursor,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(chars.iter().collect::<String>(), " tail");
+        assert_eq!(cursor, 0);
+        shell_edit(
+            &mut chars,
+            &mut cursor,
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(cursor, 5);
+    }
+
+    #[test]
+    fn pickers_accept_j_and_k_as_search_text() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut store = Store::open(directory.path().into())?;
+        let (sender, _receiver) = mpsc::channel();
+        let mut ui = Ui::default();
+        ui.open_picker(PickKind::Workspace);
+        key(
+            &mut ui,
+            &mut store,
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
+            &sender,
+        )?;
+        for letter in ['j', 'k'] {
+            key(
+                &mut ui,
+                &mut store,
+                KeyEvent::new(KeyCode::Char(letter), KeyModifiers::NONE),
+                &sender,
+            )?;
+        }
+        assert_eq!(
+            ui.picker.as_ref().map(|picker| picker.query.as_str()),
+            Some("jk")
+        );
+        Ok(())
+    }
     #[test]
     fn opening_error_details_preserves_the_error() -> Result<()> {
         let directory = tempfile::tempdir()?;
