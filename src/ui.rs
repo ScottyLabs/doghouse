@@ -6,6 +6,7 @@ enum PickKind {
     Workspace,
     Project,
     Repository,
+    Source,
 }
 struct Picker {
     kind: PickKind,
@@ -304,6 +305,29 @@ impl Ui {
     fn choices(&self, store: &Store, kind: PickKind, query: &str) -> Vec<Choice> {
         let query = query.to_lowercase();
         let mut choices = match kind {
+            PickKind::Source => [
+                (
+                    "Issues + PRs",
+                    "All shared work and local tasks; the default view",
+                ),
+                ("Issues", "Issues and local tasks; hide pull requests"),
+                (
+                    "Pull requests",
+                    "Proposed changes, including draft pull requests",
+                ),
+                (
+                    "Unsent drafts",
+                    "Local issue drafts that have not been published",
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, (name, description))| Choice {
+                id: Some(index.to_string()),
+                name: name.into(),
+                description: description.into(),
+            })
+            .collect(),
             PickKind::Workspace => {
                 let mut items = vec![Choice {
                     id: None,
@@ -368,7 +392,11 @@ impl Ui {
     fn open_picker(&mut self, kind: PickKind) {
         self.picker = Some(Picker {
             kind,
-            row: 0,
+            row: if matches!(kind, PickKind::Source) {
+                self.source
+            } else {
+                0
+            },
             query: String::new(),
         });
     }
@@ -551,14 +579,7 @@ fn run_ui(
     let (workspace, project) = initial_scope(workspace, project, &store.data["preferences"]);
     let saved_view = store.data["preferences"]["workspace"].as_str() == workspace.as_deref()
         && store.data["preferences"]["project"].as_str() == project.as_deref();
-    let source = if saved_view {
-        store.data["preferences"]["source"]
-            .as_u64()
-            .filter(|source| *source <= 3)
-            .unwrap_or(1) as usize
-    } else {
-        1
-    };
+    let source = 0;
     let column = if saved_view {
         store.data["preferences"]["column"]
             .as_u64()

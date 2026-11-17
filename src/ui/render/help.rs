@@ -186,7 +186,7 @@ fn contents(ui: &Ui) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
                 ("w", "Choose workspace"),
                 ("P", "Choose project"),
                 ("r / Tab", "Choose / cycle repositories"),
-                ("f", "Issues / PRs / drafts"),
+                ("f", "Choose shown items"),
                 ("v", "List / kanban"),
                 ("s", "Refresh shared tasks"),
                 ("g / G", "Refresh / open Governance"),

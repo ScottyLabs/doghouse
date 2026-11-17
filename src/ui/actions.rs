@@ -77,7 +77,7 @@ fn prompt(
             let project = local::add(store, PathBuf::from(value), None)?;
             ui.workspace = Some(local::WORKSPACE.into());
             ui.project = Some(project.id);
-            ui.source = 1;
+            ui.source = 0;
             ui.repo = 0;
             ui.column = 0;
             ui.row = 0;
@@ -113,7 +113,7 @@ fn prompt(
             )?;
             store.task_mut(&id)?["stage"] = json!(STAGES[ui.column]);
             store.save()?;
-            ui.source = 1;
+            ui.source = 0;
             ui.query.clear();
             ui.row = ui
                 .visible(store)
@@ -213,12 +213,22 @@ pub(super) fn key(
             KeyCode::Enter => {
                 let choice = choices.get(picker.row).context("No matching selection")?;
                 match picker.kind {
+                    PickKind::Source => {
+                        ui.source = choice.id.as_deref().context("Choose a source")?.parse()?;
+                        ui.row = 0;
+                        ui.scroll = 0;
+                        ui.detail = false;
+                        ui.message = format!("Showing {} / f change shown items", choice.name);
+                        return Ok(false);
+                    }
                     PickKind::Workspace => {
+                        ui.source = 0;
                         ui.workspace = choice.id.clone();
                         ui.project = None;
                         ui.repo = 0;
                     }
                     PickKind::Project => {
+                        ui.source = 0;
                         ui.project = choice.id.clone();
                         ui.repo = 0;
                     }
@@ -438,10 +448,7 @@ pub(super) fn key(
             ui.message = "Opened canonical Governance declaration".into();
         }
         KeyCode::Char('g') => ui.start_discovery(sender)?,
-        KeyCode::Char('f') => {
-            ui.source = (ui.source + 1) % 4;
-            ui.row = 0
-        }
+        KeyCode::Char('f') => ui.open_picker(PickKind::Source),
         KeyCode::Char('a') => {
             ui.agents = !ui.agents;
             ui.row = 0

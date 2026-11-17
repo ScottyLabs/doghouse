@@ -611,7 +611,7 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
                         )
                     } else {
                         format!(
-                            "{open} open / {source}{}",
+                            "{open} open / Showing: {source} [f]{}",
                             if ui.personal_loading {
                                 " / account refreshing"
                             } else {
@@ -1057,13 +1057,18 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
             PickKind::Workspace => "Governance workspaces",
             PickKind::Project => "Governance projects",
             PickKind::Repository => "Project repositories",
+            PickKind::Source => "Show items",
         };
         f.render_widget(block(title, true), rect);
         f.render_widget(
             Paragraph::new(vec![
                 Line::from(label(format!("Filter: {}", clean(&picker.query)), BLUE)),
                 Line::from(label(
-                    "Defined in Governance / shared across machines",
+                    if matches!(picker.kind, PickKind::Source) {
+                        "Choose what appears on the board / Esc keeps the current view"
+                    } else {
+                        "Defined in Governance / shared across machines"
+                    },
                     MUTED,
                 )),
             ]),

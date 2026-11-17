@@ -4,7 +4,7 @@ Shepherd uses the same Governance hierarchy wherever it runs:
 
 - Workspace: a Governance team, such as DevOps or CMU Housing.
 - Project: a project declared under that team; it can own several repositories.
-- Task: a GCD issue. Pull requests are related changes and a separate source view.
+- Task: a GCD issue or pull request. Both appear together by default.
 
 Governance discovery refreshes on startup. Choose a workspace with `w` and a project with `P`. `r` selects a repository within the project; Tab cycles those repositories. Projects without repositories remain visible. `G` opens the canonical Governance declaration; workspace/project definitions are maintained there rather than duplicated locally.
 
@@ -20,7 +20,7 @@ The list keeps task details beside the selection when the terminal is wide enoug
 | w / P / r | Workspace / project / repository picker |
 | Tab / Shift+Tab | Next / previous scoped repository |
 | / | Live search; Enter keeps it, Esc restores the previous search |
-| f | Cycle issues, PRs, all shared sources, unsent drafts |
+| f | Choose Issues + PRs, Issues, Pull requests, or Unsent drafts |
 | v | Task list / kanban |
 | n | Create an issue on GCD; Tab chooses its target repository |
 | e / d | Edit title / multiline description on GCD |
@@ -38,6 +38,8 @@ The list keeps task details beside the selection when the terminal is wide enoug
 | ? / q | Show actions / quit |
 
 Editors support Left, Right, Home, End, Delete, and Backspace. Enter saves titles, assignees, and priorities. In descriptions and comments, Enter inserts a newline; Ctrl+S saves or posts. Comments use `collar issue comment` or `collar pr comment` with literal stdin. Close/reopen uses the corresponding typed Collar command. Closing a PR does not merge it; merged PRs cannot be reopened. The dialog identifies the remote write. Edits compare the inspected remote issue with its current state before sending; stale edits fail. Writes are never retried automatically. If a response is uncertain, inspect the issue on GCD before trying again. Ordinary quit waits for a pending write; Ctrl+C force-exits and its remote write may already have completed.
+
+Startup and workspace or project changes show Issues + PRs together. Press `f` to choose a narrower view from a menu; Esc cancels without changing it.
 
 Stages follow repository labels such as `stage/ready`, `stage/in-progress`, and `stage/in progress`. Closed/merged resources are Done. Without a stage label, assigned issues appear active and issues with a directly closing open PR appear in review. Repositories without the requested shared workflow label show an actionable error instead of saving a misleading local override. Priority honors existing `priority/*` and `urgency/*` labels. Shepherd does not provision labels or change Governance settings.
 
