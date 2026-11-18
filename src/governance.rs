@@ -127,28 +127,9 @@ fn api_read(path: &str, fields: &[(&str, &str)], background: bool) -> Result<Val
     } else {
         shared::read_permit()?
     };
-    let mut command = collar_command();
-    command.args([
-        "--host",
-        "https://git.cmu.dev",
-        "api",
-        path,
-        "--method",
-        "GET",
-    ]);
-    for (name, value) in fields {
-        command.args(["-f", &format!("{name}={value}")]);
-    }
-    let output = command
-        .output()
-        .context("Run Collar; install Collar and sign in with collar auth login")?;
-    ensure!(
-        output.status.success(),
-        "Collar read failed: {}",
-        clean(&String::from_utf8_lossy(&output.stderr))
-    );
-    serde_json::from_slice(&output.stdout).context("Invalid Collar API JSON")
+    forge::client()?.read_with_permit(path, fields)
 }
+
 pub(crate) fn discover() -> Result<Catalog> {
     let _permit = shared::background_read_permit()?;
     let output = collar_command()

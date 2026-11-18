@@ -67,6 +67,10 @@ fn edit(
             "Value is too long"
         );
         ensure!(mode != 'e' || !value.trim().is_empty(), "Title is required");
+        ensure!(
+            mode != 'p' || matches!(value.as_str(), "high" | "normal" | "low"),
+            "Choose high, normal, or low"
+        );
         task[field] = json!(value);
         touch(task, "Updated local task");
         store.save()?;
@@ -261,6 +265,35 @@ pub(super) fn key(
             KeyCode::Enter => {
                 let choice = choices.get(picker.row).context("No matching selection")?;
                 match picker.kind {
+                    PickKind::Actions => {
+                        let task = selected(ui, store)?;
+                        ensure!(
+                            ui.edit_target
+                                .as_ref()
+                                .is_some_and(|(id, revision)| task["id"] == *id
+                                    && task["revision"] == *revision),
+                            "Task changed; reopen its action menu"
+                        );
+                        let action = choice
+                            .id
+                            .as_deref()
+                            .and_then(|id| id.chars().next())
+                            .context("Choose an action")?;
+                        return self::key(
+                            ui,
+                            store,
+                            KeyEvent::new(KeyCode::Char(action), KeyModifiers::NONE),
+                            sender,
+                        );
+                    }
+                    PickKind::Priority => {
+                        let value = choice.id.clone().context("Choose a priority")?;
+                        if let Err(error) = edit(ui, store, 'p', value, sender) {
+                            ui.picker = Some(picker);
+                            return Err(error);
+                        }
+                        return Ok(false);
+                    }
                     PickKind::Source => {
                         ui.source = choice.id.as_deref().context("Choose a source")?.parse()?;
                         ui.row = 0;
@@ -612,13 +645,14 @@ pub(super) fn key(
             }
             ui.open_prompt(c, String::new());
         }
+        KeyCode::Char(' ') => {
+            let task = selected(ui, store)?;
+            target(ui, &task)?;
+            ui.open_picker(PickKind::Actions);
+        }
         KeyCode::Char(c @ ('e' | 'd' | 'o' | 'p')) => {
             ensure!(!ui.writing, "A GCD write is already running");
             let task = selected(ui, store)?;
-            ensure!(
-                task["source"].is_null() || task["source"]["kind"] == "issue",
-                "Open PRs on GCD with O"
-            );
             target(ui, &task)?;
             let field = match c {
                 'e' => "title",
@@ -626,16 +660,11 @@ pub(super) fn key(
                 'o' => "owner",
                 _ => "priority",
             };
-            let value = if c == 'p' {
-                match string(&task, "priority") {
-                    "normal" => "high",
-                    "high" => "low",
-                    _ => "normal",
-                }
-                .into()
-            } else {
-                string(&task, field).into()
-            };
+            if c == 'p' {
+                ui.open_priority(string(&task, "priority"));
+                return Ok(false);
+            }
+            let value = string(&task, field).into();
             ui.open_prompt(c, value);
         }
         KeyCode::Char('m') => {

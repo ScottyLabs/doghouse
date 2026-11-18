@@ -20,6 +20,7 @@ use std::{
 };
 
 mod agents;
+mod forge;
 mod governance;
 mod local;
 mod personal;
@@ -330,38 +331,6 @@ fn touch(t: &mut Value, message: &str) {
         events.push(json!({"message":message,"at":now()}))
     }
 }
-fn collar(repo: &str, kind: &str) -> Result<Vec<Value>> {
-    let _permit = shared::background_read_permit()?;
-    ensure!(repo_valid(repo), "Use owner/repository");
-    let output = collar_command()
-        .args([
-            "--host",
-            "https://git.cmu.dev",
-            "-R",
-            repo,
-            kind,
-            "list",
-            "--state",
-            "all",
-            "--limit",
-            "5001",
-            "--json",
-        ])
-        .output()
-        .context("Install Collar and run collar auth login")?;
-    ensure!(
-        output.status.success(),
-        "Collar read failed: {}",
-        clean(&String::from_utf8_lossy(&output.stderr))
-    );
-    let values: Vec<Value> =
-        serde_json::from_slice(&output.stdout).context("Invalid Collar JSON")?;
-    ensure!(
-        values.len() <= 5000,
-        "Over 5000 records; refusing an incomplete import"
-    );
-    Ok(values)
-}
 fn todos(body: &str) -> Vec<Value> {
     let mut fence = false;
     body.lines()
@@ -537,12 +506,10 @@ fn merged_records(data: &Value, repo: &str, issues: &[Value], prs: &[Value]) -> 
                 }
             };
             let t = &mut tasks[i];
-            if kind == "issue"
-                && let (Some(previous), Some(incoming)) = (
-                    t["source"]["remote"]["updated_at"].as_str(),
-                    record["_remote"]["updated_at"].as_str(),
-                )
-                && previous > incoming
+            if let (Some(previous), Some(incoming)) = (
+                t["source"]["remote"]["updated_at"].as_str(),
+                record["_remote"]["updated_at"].as_str(),
+            ) && previous > incoming
             {
                 continue;
             }

@@ -163,7 +163,8 @@ fn contents(ui: &Ui) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
                         "New GCD issue"
                     },
                 ),
-                ("e / d", "Edit title / description"),
+                ("Space", "Task actions and editing menu"),
+                ("e / d", "Edit issue or PR title / description"),
                 ("o / p", "Owner / priority"),
                 ("m", "Move task"),
                 ("b", "Export task context"),

@@ -7,6 +7,8 @@ enum PickKind {
     Project,
     Repository,
     Source,
+    Actions,
+    Priority,
 }
 struct Picker {
     searching: bool,
@@ -22,7 +24,7 @@ struct Choice {
 enum Job {
     Catalog(Result<governance::Catalog>),
     Snapshot(String, String, Result<(Vec<Value>, Vec<Value>)>),
-    Written(String, Result<Value>, bool),
+    Written(String, Result<Value>, bool, String),
     RunPublished(String, Result<Value>),
     Reports(String, Result<Vec<Value>>),
     Commented(String, Result<Value>),
@@ -116,6 +118,7 @@ impl Ui {
         if self.personal_loading {
             return Ok(());
         }
+        forge::reset()?;
         self.personal_loading = true;
         let sender = sender.clone();
         std::thread::spawn(move || {
@@ -180,6 +183,23 @@ impl Ui {
     fn open_prompt(&mut self, mode: char, value: String) {
         self.cursor = value.chars().count();
         self.prompt = Some((mode, value));
+    }
+    fn open_priority(&mut self, priority: &str) {
+        self.open_picker(PickKind::Priority);
+        if let Some(picker) = &mut self.picker {
+            picker.row = match priority {
+                "high" => 0,
+                "low" => 2,
+                _ => 1,
+            };
+        }
+    }
+    fn restore_edit(&mut self, mode: char, value: String) {
+        if mode == 'p' {
+            self.open_priority(&value);
+        } else {
+            self.open_prompt(mode, value);
+        }
     }
     fn repos(&self, store: &Store) -> Vec<String> {
         store
@@ -307,6 +327,42 @@ impl Ui {
     fn choices(&self, store: &Store, kind: PickKind, query: &str) -> Vec<Choice> {
         let query = query.to_lowercase();
         let mut choices = match kind {
+            PickKind::Actions => {
+                let shared = self
+                    .selected(store)
+                    .is_some_and(|task| !task["source"].is_null());
+                let pr = self
+                    .selected(store)
+                    .is_some_and(|task| task["source"]["kind"] == "pr");
+                [
+                    ("e", "Edit title", "e"),
+                    ("d", "Edit description", "d / multiline editor"),
+                    ("o", "Change assignees", "o / comma-separated logins"),
+                    ("p", "Change priority", "p / choose high, normal, or low"),
+                    ("m", "Change stage", "m"),
+                    ("c", "Comment", "c / multiline editor"),
+                    ("z", "Close or reopen", "z / confirmation required"),
+                    ("O", "Open in browser", "O"),
+                ]
+                .into_iter()
+                .filter(|(key, _, _)| {
+                    (shared || !matches!(*key, "c" | "z" | "O")) && (!pr || *key != "m")
+                })
+                .map(|(id, name, description)| Choice {
+                    id: Some(id.into()),
+                    name: name.into(),
+                    description: description.into(),
+                })
+                .collect()
+            }
+            PickKind::Priority => ["high", "normal", "low"]
+                .into_iter()
+                .map(|value| Choice {
+                    id: Some(value.into()),
+                    name: value.into(),
+                    description: "Enter applies / Esc cancels".into(),
+                })
+                .collect(),
             PickKind::Source => [
                 (
                     "Issues + PRs",
@@ -409,6 +465,7 @@ impl Ui {
             "Offline mode uses the cached Governance catalog"
         );
         ensure!(!self.discovering, "Governance refresh is already running");
+        forge::reset()?;
         self.discovering = true;
         self.message = "Reading teams and projects from Governance through Collar".into();
         let sender = sender.clone();
@@ -435,6 +492,7 @@ impl Ui {
             !repos.is_empty(),
             "This Governance project has no repositories"
         );
+        forge::reset()?;
         self.syncing = repos.len();
         self.sync_errors.clear();
         self.sync_succeeded = 0;
@@ -463,7 +521,7 @@ impl Ui {
         ensure!(!self.writing, "A GCD write is already in progress");
         self.writing = true;
         self.error = false;
-        self.message = "Saving the issue on GCD through Collar".into();
+        self.message = "Saving on GCD through Collar".into();
         let sender = sender.clone();
         let repo = string(&task, "repo").to_owned();
         let field = field.to_owned();
@@ -472,6 +530,7 @@ impl Ui {
                 repo,
                 shared::update(&task, &field, &value),
                 false,
+                string(&task["source"], "kind").into(),
             ));
         });
         Ok(())
@@ -514,7 +573,7 @@ impl Ui {
         let sender = sender.clone();
         std::thread::spawn(move || {
             let result = shared::create(&repo, &title);
-            let _ = sender.send(Job::Written(repo, result, true));
+            let _ = sender.send(Job::Written(repo, result, true, "issue".into()));
         });
         Ok(())
     }
@@ -815,7 +874,7 @@ fn run_ui(
                             }
                             Err(error) => {
                                 if let Some((mode, body)) = ui.pending_edit.take() {
-                                    ui.open_prompt(mode, body);
+                                    ui.restore_edit(mode, body);
                                 }
                                 return Err(error);
                             }
@@ -847,12 +906,30 @@ fn run_ui(
                             }
                         );
                     }
-                    Job::Written(repo, result, created) => {
+                    Job::Written(repo, result, created, kind) => {
                         ui.writing = false;
                         match result {
                             Ok(raw) => {
-                                let record = shared::normalize(&raw);
-                                import_records(store, &repo, std::slice::from_ref(&record), &[])?;
+                                let record = if kind == "pr" {
+                                    personal::normalize_pr(&raw)
+                                } else {
+                                    shared::normalize(&raw)
+                                };
+                                if kind == "pr" {
+                                    import_records(
+                                        store,
+                                        &repo,
+                                        &[],
+                                        std::slice::from_ref(&record),
+                                    )?;
+                                } else {
+                                    import_records(
+                                        store,
+                                        &repo,
+                                        std::slice::from_ref(&record),
+                                        &[],
+                                    )?;
+                                }
                                 ui.pending_edit = None;
                                 ui.message = format!("Saved on GCD: {repo} #{}", raw["number"]);
                                 if created {
@@ -864,7 +941,7 @@ fn run_ui(
                             }
                             Err(error) => {
                                 if let Some((mode, value)) = ui.pending_edit.take() {
-                                    ui.open_prompt(mode, value)
+                                    ui.restore_edit(mode, value)
                                 }
                                 return Err(error);
                             }
@@ -953,7 +1030,131 @@ fn run_ui(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyEvent;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn action_menu_opens_pr_editors_and_priority_picker_without_writes() -> Result<()> {
+        let (_directory, mut store) = fixture()?;
+        let raw = json!({"number":3,"title":"PR title","body":"PR body","state":"open","draft":false,"merged":false,"labels":[{"id":1,"name":"priority/high"}],"assignees":[{"login":"alice"}],"head":{"sha":"abc"}});
+        import_records(
+            &mut store,
+            "ScottyLabs/infrastructure",
+            &[],
+            &[personal::normalize_pr(&raw)],
+        )?;
+        let mut ui = Ui {
+            workspace: Some("devops".into()),
+            column: 3,
+            source: 2,
+            offline: true,
+            ..Ui::default()
+        };
+        let (sender, receiver) = mpsc::channel();
+        actions::key(
+            &mut ui,
+            &mut store,
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+            &sender,
+        )?;
+        let choices = ui.choices(&store, PickKind::Actions, "description");
+        assert_eq!(choices.len(), 1);
+        assert_eq!(choices[0].id.as_deref(), Some("d"));
+        assert!(
+            !ui.choices(&store, PickKind::Actions, "")
+                .iter()
+                .any(|choice| choice.id.as_deref() == Some("m"))
+        );
+        ui.picker.as_mut().unwrap().query = "description".into();
+        actions::key(
+            &mut ui,
+            &mut store,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &sender,
+        )?;
+        assert_eq!(ui.prompt, Some(('d', "PR body".into())));
+        actions::key(
+            &mut ui,
+            &mut store,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &sender,
+        )?;
+        actions::key(
+            &mut ui,
+            &mut store,
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+            &sender,
+        )?;
+        assert_eq!(ui.picker.as_ref().unwrap().row, 0);
+        actions::key(
+            &mut ui,
+            &mut store,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &sender,
+        )?;
+        assert!(!ui.writing);
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(
+            store
+                .tasks()
+                .iter()
+                .find(|task| task["source"]["kind"] == "pr")
+                .unwrap()["priority"],
+            "high"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn local_priority_menu_supports_arrows_and_enter_and_rejects_stale_selection() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut store = Store::open(directory.path().into())?;
+        store.add("Task", None, "")?;
+        let id = string(&store.tasks()[0], "id").to_owned();
+        let (sender, _receiver) = mpsc::channel();
+        let mut ui = Ui {
+            source: 3,
+            ..Ui::default()
+        };
+        actions::key(
+            &mut ui,
+            &mut store,
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+            &sender,
+        )?;
+        assert_eq!(ui.picker.as_ref().unwrap().row, 1);
+        actions::key(
+            &mut ui,
+            &mut store,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            &sender,
+        )?;
+        actions::key(
+            &mut ui,
+            &mut store,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &sender,
+        )?;
+        assert_eq!(store.task_mut(&id)?["priority"], "high");
+        actions::key(
+            &mut ui,
+            &mut store,
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+            &sender,
+        )?;
+        touch(store.task_mut(&id)?, "Changed elsewhere");
+        assert!(
+            actions::key(
+                &mut ui,
+                &mut store,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                &sender
+            )
+            .is_err()
+        );
+        assert_eq!(store.task_mut(&id)?["priority"], "high");
+        Ok(())
+    }
     fn fixture() -> Result<(tempfile::TempDir, Store)> {
         let dir = tempfile::tempdir()?;
         let mut store = Store::open(dir.path().into())?;
@@ -1143,8 +1344,10 @@ mod tests {
                 }
             }
             let mut ui = Ui::default();
-            ui.open_picker(PickKind::Workspace);
-            terminal.draw(|f| ui.draw(f, &store))?;
+            for kind in [PickKind::Workspace, PickKind::Actions, PickKind::Priority] {
+                ui.open_picker(kind);
+                terminal.draw(|f| ui.draw(f, &store))?;
+            }
         }
         Ok(())
     }

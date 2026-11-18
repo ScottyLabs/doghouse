@@ -23,9 +23,10 @@ The list keeps task details beside the selection when the terminal is wide enoug
 | f | Choose Issues + PRs, Issues, Pull requests, or Unsent drafts |
 | v | Task list / kanban |
 | n | Create an issue on GCD; Tab chooses its target repository |
-| e / d | Edit title / multiline description on GCD |
+| Space | Searchable task-action menu; arrows or j/k choose, Enter opens |
+| e / d | Edit issue or PR title / multiline description on GCD |
 | o | Set GCD assignees using comma-separated logins |
-| p | Set shared priority through existing labels |
+| p | Choose high, normal, or low priority; starts at the current value |
 | m | Change shared stage; Done closes the issue on GCD |
 | c / C | Write a multiline issue or PR comment through Collar; Ctrl+S posts |
 | z | Close or reopen an issue or unmerged PR through Collar; Enter confirms |
@@ -37,7 +38,7 @@ The list keeps task details beside the selection when the terminal is wide enoug
 | a / A | Agents view / launch Codex or Claude Code for the selected task |
 | ? / q | Show actions / quit |
 
-Editors support Left, Right, Home, End, Delete, and Backspace. Enter saves titles, assignees, and priorities. In descriptions and comments, Enter inserts a newline; Ctrl+S saves or posts. Comments use `collar issue comment` or `collar pr comment` with literal stdin. Close/reopen uses the corresponding typed Collar command. Closing a PR does not merge it; merged PRs cannot be reopened. The dialog identifies the remote write. Edits compare the inspected remote issue with its current state before sending; stale edits fail. Writes are never retried automatically. If a response is uncertain, inspect the issue on GCD before trying again. Ordinary quit waits for a pending write; Ctrl+C force-exits and its remote write may already have completed.
+Editors support Left, Right, Home, End, Delete, and Backspace. Enter saves titles and assignees. The priority picker supports arrows or j/k, Enter applies, and Esc cancels. Selecting normal removes priority labels when no medium label exists, preserving unrelated labels. In descriptions and comments, Enter inserts a newline; Ctrl+S saves or posts. Forge reads and writes use Collar's Rust library and authenticated client in process. Comments, title/description edits, assignees, priority labels, and close/reopen work on both issues and PRs. PR stages follow draft/merge state; `m` changes issue or local task stages. Closing a PR does not merge it; merged PRs cannot be reopened. The dialog identifies the remote write. Edits compare the inspected remote issue or PR with its current state before sending; stale edits fail. Writes are never retried automatically. If a response is uncertain, inspect the issue on GCD before trying again. Ordinary quit waits for a pending write; Ctrl+C force-exits and its remote write may already have completed.
 
 Startup and workspace or project changes show Issues + PRs together. Press `f` to choose a narrower view from a menu; Esc cancels without changing it.
 
@@ -94,3 +95,5 @@ Text editors and agent goals also support Ctrl+A/E (start/end), Ctrl+U/K (delete
 Reads run with a shared limit of four Collar processes. Refreshes use at most three slots, reserving one for discussion reads and write preconditions. Repositories appear as their complete issue/PR snapshots finish; one failed repository leaves its cached tasks intact while others update. My work searches and detail reads use the same limit, and its tasks and account metadata save together. Manual refresh continues to read the forge rather than a time-based API cache.
 
 Board saves buffer JSON before fsync and atomic replacement. The UI checks the board file identity and timestamps between events, reloading it when another window replaces or edits it. The existing board format and explicit reload behavior are preserved.
+
+Forge connections and host-bound credentials are reused between requests. Manual refresh (`s`, `g`, or refreshing My work) reloads Collar credentials, so a separate `collar auth login` takes effect without restarting Shepherd. API responses retain Collar's always-on conditional cache revalidation; writes invalidate that cache. Canonical Governance discovery still uses the pinned Collar CLI to preserve its snapshot validation.

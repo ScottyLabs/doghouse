@@ -1,5 +1,5 @@
 use crate::*;
-use std::process::Stdio;
+use collar::Method;
 use std::sync::{Condvar, Mutex};
 
 const READ_WORKERS: usize = 4;
@@ -81,7 +81,7 @@ pub(crate) fn parallel_reads<T: Send, R: Send>(
 pub(crate) fn snapshot(repo: &str) -> Result<(Vec<Value>, Vec<Value>)> {
     std::thread::scope(|scope| {
         let issues = scope.spawn(|| issues(repo));
-        let prs = collar(repo, "pr");
+        let prs = pulls(repo);
         let issues = issues
             .join()
             .map_err(|_| anyhow::anyhow!("Issue reader panicked"))??;
@@ -89,12 +89,12 @@ pub(crate) fn snapshot(repo: &str) -> Result<(Vec<Value>, Vec<Value>)> {
     })
 }
 
-fn collect_pages(
+pub(crate) fn collect_pages(
     mut read: impl FnMut(usize) -> Result<Vec<Value>>,
     maximum: usize,
 ) -> Result<Vec<Value>> {
     let mut records = Vec::new();
-    for page in 1..=(maximum / 50 + 1) {
+    for page in 1..=maximum.saturating_add(1) {
         let entries = read(page)?;
         let count = entries.len();
         records.extend(entries);
@@ -102,7 +102,7 @@ fn collect_pages(
             records.len() <= maximum,
             "Listing exceeds {maximum} records; refusing a partial snapshot"
         );
-        if count < 50 {
+        if count == 0 {
             return Ok(records);
         }
     }
@@ -160,6 +160,26 @@ pub(crate) fn issues(repo: &str) -> Result<Vec<Value>> {
                 "Issue listing changed during pagination; refresh again"
             );
             Ok(normalize(&raw))
+        })
+        .collect()
+}
+pub(crate) fn pulls(repo: &str) -> Result<Vec<Value>> {
+    ensure!(repo_valid(repo), "Use owner/repository");
+    let records = background_list(
+        &format!("repos/{repo}/pulls"),
+        &[("state", "all"), ("sort", "oldest")],
+        5000,
+    )?;
+    let mut seen = std::collections::BTreeSet::new();
+    records
+        .into_iter()
+        .map(|raw| {
+            let number = raw["number"].as_u64().context("PR has no number")?;
+            ensure!(
+                seen.insert(number),
+                "PR listing changed during pagination; refresh again"
+            );
+            Ok(personal::normalize_pr(&raw))
         })
         .collect()
 }
@@ -250,44 +270,14 @@ pub(crate) fn priority(record: &Value) -> &'static str {
     }
 }
 fn endpoint(task: &Value) -> Result<String> {
-    ensure!(
-        task["source"]["kind"] == "issue",
-        "Select a GCD issue; PRs are changed on GCD"
-    );
-    let repo = string(task, "repo");
-    ensure!(repo_valid(repo), "Task has no valid repository");
-    let number = task["source"]["number"]
-        .as_u64()
-        .context("Issue has no number")?;
-    Ok(format!("repos/{repo}/issues/{number}"))
+    let (kind, repo, number) = discussion(task)?;
+    Ok(format!(
+        "repos/{repo}/{}/{number}",
+        if kind == "pr" { "pulls" } else { "issues" }
+    ))
 }
-fn write(path: &str, method: &str, body: &Value) -> Result<Value> {
-    let mut child = collar_command()
-        .args([
-            "--host",
-            "https://git.cmu.dev",
-            "api",
-            path,
-            "--method",
-            method,
-            "--input",
-            "-",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("Run Collar")?;
-    let stdin = child.stdin.take().context("Collar stdin is unavailable")?;
-    serde_json::to_writer(stdin, body)?;
-    let output = child.wait_with_output()?;
-    ensure!(
-        output.status.success(),
-        "GCD write failed; inspect the issue before retrying: {}",
-        clean(&String::from_utf8_lossy(&output.stderr))
-    );
-    serde_json::from_slice(&output.stdout)
-        .context("GCD write may have completed; refresh before retrying")
+fn write(path: &str, method: Method, body: &Value) -> Result<Value> {
+    forge::client()?.write(path, method, body)
 }
 pub(crate) fn create(repo: &str, title: &str) -> Result<Value> {
     ensure!(repo_valid(repo), "Choose an explicit project repository");
@@ -297,12 +287,12 @@ pub(crate) fn create(repo: &str, title: &str) -> Result<Value> {
     );
     write(
         &format!("repos/{repo}/issues"),
-        "POST",
+        Method::POST,
         &json!({"title":title.trim(),"body":""}),
     )
 }
 fn verify(expected: &Value, current: &Value) -> Result<()> {
-    ensure!(expected.is_object(), "Refresh this issue before editing it");
+    ensure!(expected.is_object(), "Refresh this item before editing it");
     for field in [
         "updated_at",
         "title",
@@ -313,15 +303,20 @@ fn verify(expected: &Value, current: &Value) -> Result<()> {
     ] {
         ensure!(
             expected[field] == current[field],
-            "Issue changed on GCD; refresh and review it before writing"
+            "Item changed on GCD; refresh and review it before writing"
         );
     }
     Ok(())
 }
 pub(crate) fn update(task: &Value, field: &str, value: &str) -> Result<Value> {
+    update_with(forge::client()?.as_ref(), task, field, value)
+}
+fn update_with(client: &forge::Client, task: &Value, field: &str, value: &str) -> Result<Value> {
     let path = endpoint(task)?;
-    let current = governance::api(&path, &[])?;
-    verify(&task["source"]["remote"], &current)?;
+    let current = client.read(&path, &[])?;
+    verify_task(task, &current)?;
+    let (_, repo, number) = discussion(task)?;
+    let issue_path = format!("repos/{repo}/issues/{number}");
     let payload = match field {
         "title" => {
             ensure!(
@@ -338,13 +333,22 @@ pub(crate) fn update(task: &Value, field: &str, value: &str) -> Result<Value> {
             json!({"assignees":value.split(',').map(str::trim).filter(|s|!s.is_empty()).collect::<Vec<_>>()})
         }
         "stage" | "priority" => {
+            ensure!(
+                field != "stage" || task["source"]["kind"] == "issue",
+                "PR stage follows its draft and merge state; use close/reopen for its state"
+            );
             let repo = string(task, "repo");
             if field == "stage" && value == "done" {
                 ensure!(task["source"]["state"] == "OPEN", "Issue is already closed");
-                return change_state(task);
+                return change_state_with(client, task);
             }
-            let local = list(&format!("repos/{repo}/labels"), &[], 1000)?;
-            let org = list("orgs/ScottyLabs/labels", &[], 1000)?;
+            let local = client.list(&format!("repos/{repo}/labels"), &[], 1000)?;
+            let (owner, _) = repo.split_once('/').context("Invalid repository")?;
+            let org = match client.list(&format!("orgs/{owner}/labels"), &[], 1000) {
+                Ok(labels) => labels,
+                Err(error) if collar::HttpStatus::is(&error, 404) => Vec::new(),
+                Err(error) => return Err(error),
+            };
             let available = local.iter().chain(org.iter());
             let names: &[&str] = match (field, value) {
                 ("stage", "backlog") => &["stage/backlog", "stage/todo"],
@@ -366,7 +370,9 @@ pub(crate) fn update(task: &Value, field: &str, value: &str) -> Result<Value> {
                     .copied()
             });
             ensure!(
-                matching.is_some() || (field == "stage" && value == "backlog"),
+                matching.is_some()
+                    || (field == "stage" && value == "backlog")
+                    || (field == "priority" && value == "normal"),
                 "This repository has no shared label for that value. Configure its workflow on GCD; Shepherd will not create labels."
             );
             if field == "stage" && string(&current, "state") == "closed" {
@@ -377,7 +383,7 @@ pub(crate) fn update(task: &Value, field: &str, value: &str) -> Result<Value> {
                     stage(&opened, "issue") == value,
                     "Reopen the issue on GCD before changing its stage"
                 );
-                return write(&path, "PATCH", &json!({"state":"open"}));
+                return client.write(&path, Method::PATCH, &json!({"state":"open"}));
             }
             let labels = current["labels"]
                 .as_array()
@@ -414,20 +420,28 @@ pub(crate) fn update(task: &Value, field: &str, value: &str) -> Result<Value> {
                     "This issue needs a shared stage/backlog label to override assignment or PR review. No changes were sent."
                 );
             }
-            let latest = governance::api(&path, &[])?;
+            let latest = client.read(&path, &[])?;
             verify(&current, &latest)?;
-            write(
-                &format!("{path}/labels"),
-                "PUT",
+            verify_task(task, &latest)?;
+            client.write(
+                &format!("{issue_path}/labels"),
+                Method::PUT,
                 &json!({"labels":retained}),
             )?;
-            return governance::api(&path, &[]).context(
+            return client.read(&path, &[]).context(
                 "Labels were updated on GCD but the refresh failed; inspect before retrying",
             );
         }
         _ => bail!("Unsupported shared issue field"),
     };
-    write(&path, "PATCH", &payload)
+    client.write(
+        if field == "owner" { &issue_path } else { &path },
+        Method::PATCH,
+        &payload,
+    )?;
+    client
+        .read(&path, &[])
+        .context("Saved on GCD but refreshing failed; inspect before retrying")
 }
 
 pub(crate) fn publish_run(repository: &str, number: u64, body: &str) -> Result<Value> {
@@ -438,7 +452,7 @@ pub(crate) fn publish_run(repository: &str, number: u64, body: &str) -> Result<V
     );
     write(
         &format!("repos/{repository}/issues/{number}/comments"),
-        "POST",
+        Method::POST,
         &json!({"body":body}),
     )
 }
@@ -456,65 +470,38 @@ fn discussion(task: &Value) -> Result<(&str, &str, u64)> {
         .context("Source has no number")?;
     Ok((kind, repo, number))
 }
-fn native_write(task: &Value, operation: &str, body: Option<&str>) -> Result<Value> {
-    let (kind, repo, number) = discussion(task)?;
-    ensure!(
-        matches!(operation, "comment" | "close" | "reopen"),
-        "Unsupported Collar action"
-    );
-    let mut command = collar_command();
-    command.args([
-        "--host",
-        "https://git.cmu.dev",
-        "-R",
-        repo,
-        kind,
-        operation,
-        &number.to_string(),
-        "--json",
-    ]);
-    if body.is_some() {
-        command.args(["--body-file", "-"]);
+fn verify_task(task: &Value, current: &Value) -> Result<()> {
+    verify(&task["source"]["remote"], current)?;
+    if task["source"]["kind"] == "pr" {
+        ensure!(
+            current["head"]["sha"] == task["source"]["head"]
+                && current["merged"] == task["source"]["remote"]["merged"],
+            "PR changed on GCD; refresh before editing"
+        );
     }
-    let mut child = command
-        .stdin(if body.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("Start Collar")?;
-    if let Some(body) = body {
-        let delivery = child
-            .stdin
-            .take()
-            .context("Collar stdin is unavailable")?
-            .write_all(body.as_bytes());
-        if let Err(error) = delivery {
-            let _ = child.wait();
-            return Err(error)
-                .context("Comment submission is uncertain; inspect GCD before sending again");
-        }
-    }
-    let output = child.wait_with_output()?;
-    ensure!(
-        output.status.success(),
-        "Collar action failed; inspect GCD before trying again: {}",
-        clean(&String::from_utf8_lossy(&output.stderr))
-    );
-    serde_json::from_slice(&output.stdout)
-        .context("Collar action may have completed; refresh GCD before trying again")
+    Ok(())
 }
 pub(crate) fn comment(task: &Value, body: &str) -> Result<Value> {
     ensure!(
         !body.trim().is_empty() && body.len() <= 20000,
         "Comment must be 1-20000 bytes"
     );
-    native_write(task, "comment", Some(body))
+    let (_, repo, number) = discussion(task)?;
+    write(
+        &format!("repos/{repo}/issues/{number}/comments"),
+        Method::POST,
+        &json!({"body":body}),
+    )
 }
 pub(crate) fn change_state(task: &Value) -> Result<Value> {
+    let raw = change_state_with(forge::client()?.as_ref(), task)?;
+    Ok(if task["source"]["kind"] == "pr" {
+        personal::normalize_pr(&raw)
+    } else {
+        normalize(&raw)
+    })
+}
+fn change_state_with(client: &forge::Client, task: &Value) -> Result<Value> {
     let (kind, repo, number) = discussion(task)?;
     let state = string(&task["source"], "state");
     ensure!(
@@ -525,25 +512,20 @@ pub(crate) fn change_state(task: &Value) -> Result<Value> {
         "repos/{repo}/{}/{number}",
         if kind == "pr" { "pulls" } else { "issues" }
     );
-    let current = governance::api(&path, &[])?;
-    if kind == "issue" {
-        verify(&task["source"]["remote"], &current)?;
-    } else {
-        ensure!(
-            current["merged"] != true
-                && string(&current, "state").to_uppercase() == state
-                && current["title"] == task["title"]
-                && current["body"].as_str().unwrap_or("") == string(task, "body")
-                && current["head"]["sha"] == task["source"]["head"],
-            "PR changed on GCD; refresh and review it before changing its state"
-        );
-    }
-    let result = native_write(task, if state == "OPEN" { "close" } else { "reopen" }, None)?;
-    if kind == "issue" {
-        return governance::api(&path, &[]).map(|raw| normalize(&raw)).context("Issue state changed through Collar, but refreshing it failed. Inspect GCD before trying again");
-    }
-    Ok(result)
+    let current = client.read(&path, &[])?;
+    verify_task(task, &current)?;
+    ensure!(current["merged"] != true, "Merged PRs cannot change state");
+    client.write(
+        &path,
+        Method::PATCH,
+        &json!({"state":if state == "OPEN" {"closed"} else {"open"}}),
+    )?;
+    let raw = client
+        .read(&path, &[])
+        .context("State saved on GCD but refreshing failed; inspect before retrying")?;
+    Ok(raw)
 }
+
 pub(crate) fn comments(task: &Value) -> Result<Vec<Value>> {
     let (_, repository, number) = discussion(task)?;
     let comments = list(
@@ -557,6 +539,209 @@ pub(crate) fn comments(task: &Value) -> Result<Vec<Value>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tiny_http::{Response, Server};
+
+    fn fixture(
+        steps: Vec<(&'static str, String, Option<Value>, Value)>,
+    ) -> (forge::Client, std::thread::JoinHandle<()>) {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let api = collar::Api::new(
+            collar::host_url(&format!("http://{}", server.server_addr())).unwrap(),
+            Some("fixture-token".into()),
+        )
+        .unwrap()
+        .with_read_cache(collar::ReadCache {
+            directory: Some(cache.path().into()),
+            refresh: false,
+        });
+        let worker = std::thread::spawn(move || {
+            let _cache = cache;
+            for (method, path, body, response) in steps {
+                let mut request = server
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(request.method().as_str(), method);
+                assert_eq!(request.url(), format!("/api/v1/{path}"));
+                if let Some(body) = body {
+                    let received: Value = serde_json::from_reader(request.as_reader()).unwrap();
+                    assert_eq!(received, body);
+                }
+                request
+                    .respond(Response::from_string(response.to_string()))
+                    .unwrap();
+            }
+            assert!(
+                server
+                    .recv_timeout(Duration::from_millis(50))
+                    .unwrap()
+                    .is_none(),
+                "Unexpected retry or extra write"
+            );
+        });
+        (forge::Client { api }, worker)
+    }
+
+    fn remote_task(kind: &str) -> Value {
+        let raw = json!({"number":7,"title":"Before","body":"Body","state":"open","merged":false,"draft":false,"updated_at":"v1","labels":[{"id":1,"name":"type/bug"},{"id":2,"name":"priority/low"}],"assignees":[{"login":"old"}],"head":{"sha":"head"}});
+        json!({"repo":"ScottyLabs/example","title":"Before","body":"Body","source":{"kind":kind,"number":7,"state":"OPEN","head":"head","remote":raw}})
+    }
+
+    #[test]
+    fn issue_and_pr_edits_use_the_correct_endpoint_and_refresh_metadata() {
+        for kind in ["issue", "pr"] {
+            for (field, value, payload) in [
+                ("title", "After", json!({"title":"After"})),
+                ("body", "New\nbody", json!({"body":"New\nbody"})),
+                ("owner", "alice, bob", json!({"assignees":["alice","bob"]})),
+            ] {
+                let task = remote_task(kind);
+                let path = endpoint(&task).unwrap();
+                let write_path = if field == "owner" {
+                    "repos/ScottyLabs/example/issues/7".into()
+                } else {
+                    path.clone()
+                };
+                let mut updated = task["source"]["remote"].clone();
+                updated["updated_at"] = json!("v2");
+                let (client, worker) = fixture(vec![
+                    ("GET", path.clone(), None, task["source"]["remote"].clone()),
+                    ("PATCH", write_path, Some(payload), updated.clone()),
+                    ("GET", path, None, updated.clone()),
+                ]);
+                assert_eq!(update_with(&client, &task, field, value).unwrap(), updated);
+                worker.join().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn pr_priority_preserves_unrelated_labels_and_uses_issue_label_endpoint() {
+        let task = remote_task("pr");
+        let path = endpoint(&task).unwrap();
+        let current = task["source"]["remote"].clone();
+        let mut updated = current.clone();
+        updated["labels"] = json!([{"id":1,"name":"type/bug"},{"id":3,"name":"priority/high"}]);
+        let (client, worker) = fixture(vec![
+            ("GET", path.clone(), None, current.clone()),
+            (
+                "GET",
+                "repos/ScottyLabs/example/labels?page=1&limit=50".into(),
+                None,
+                json!([{"id":3,"name":"priority/high"}]),
+            ),
+            (
+                "GET",
+                "repos/ScottyLabs/example/labels?page=2&limit=50".into(),
+                None,
+                json!([]),
+            ),
+            (
+                "GET",
+                "orgs/ScottyLabs/labels?page=1&limit=50".into(),
+                None,
+                json!([]),
+            ),
+            ("GET", path.clone(), None, current),
+            (
+                "PUT",
+                "repos/ScottyLabs/example/issues/7/labels".into(),
+                Some(json!({"labels":[1,3]})),
+                updated["labels"].clone(),
+            ),
+            ("GET", path, None, updated.clone()),
+        ]);
+        assert_eq!(
+            update_with(&client, &task, "priority", "high").unwrap(),
+            updated
+        );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn normal_priority_can_clear_priority_labels_without_a_medium_label() {
+        let task = remote_task("issue");
+        let path = endpoint(&task).unwrap();
+        let current = task["source"]["remote"].clone();
+        let mut updated = current.clone();
+        updated["labels"] = json!([{"id":1,"name":"type/bug"}]);
+        let (client, worker) = fixture(vec![
+            ("GET", path.clone(), None, current.clone()),
+            (
+                "GET",
+                "repos/ScottyLabs/example/labels?page=1&limit=50".into(),
+                None,
+                json!([]),
+            ),
+            (
+                "GET",
+                "orgs/ScottyLabs/labels?page=1&limit=50".into(),
+                None,
+                json!([]),
+            ),
+            ("GET", path.clone(), None, current),
+            (
+                "PUT",
+                "repos/ScottyLabs/example/issues/7/labels".into(),
+                Some(json!({"labels":[1]})),
+                updated["labels"].clone(),
+            ),
+            ("GET", path, None, updated.clone()),
+        ]);
+        assert_eq!(
+            update_with(&client, &task, "priority", "normal").unwrap(),
+            updated
+        );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn state_changes_preserve_raw_metadata_for_issues_and_unmerged_prs() {
+        for (kind, state) in [
+            ("issue", "OPEN"),
+            ("pr", "OPEN"),
+            ("issue", "CLOSED"),
+            ("pr", "CLOSED"),
+        ] {
+            let mut task = remote_task(kind);
+            task["source"]["state"] = json!(state);
+            task["source"]["remote"]["state"] = json!(state.to_lowercase());
+            let path = endpoint(&task).unwrap();
+            let mut closed = task["source"]["remote"].clone();
+            closed["state"] = json!(if state == "OPEN" { "closed" } else { "open" });
+            let (client, worker) = fixture(vec![
+                ("GET", path.clone(), None, task["source"]["remote"].clone()),
+                (
+                    "PATCH",
+                    path.clone(),
+                    Some(json!({"state":closed["state"]})),
+                    closed.clone(),
+                ),
+                ("GET", path, None, closed.clone()),
+            ]);
+            assert_eq!(change_state_with(&client, &task).unwrap(), closed);
+            assert_eq!(closed["merged"], false);
+            assert_eq!(closed["labels"][0]["name"], "type/bug");
+            worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn changed_pr_heads_and_stale_issue_metadata_prevent_writes() {
+        for kind in ["issue", "pr"] {
+            let task = remote_task(kind);
+            let mut current = task["source"]["remote"].clone();
+            if kind == "pr" {
+                current["head"]["sha"] = json!("new-head");
+            } else {
+                current["updated_at"] = json!("v2");
+            }
+            let (client, worker) = fixture(vec![("GET", endpoint(&task).unwrap(), None, current)]);
+            assert!(update_with(&client, &task, "title", "After").is_err());
+            worker.join().unwrap();
+        }
+    }
     #[test]
     fn existing_stage_aliases_and_priorities_are_shared() {
         assert_eq!(
@@ -570,20 +755,22 @@ mod tests {
     }
     #[test]
     fn pagination_handles_fifty_item_server_cap_and_exact_boundaries() -> Result<()> {
-        for total in [0, 49, 50, 51, 100, 102, 5000] {
-            let mut pages = Vec::new();
-            let records = collect_pages(
-                |page| {
-                    pages.push(page);
-                    let start = (page - 1) * 50;
-                    Ok((start..(start + 50).min(total))
-                        .map(|number| json!({"number":number}))
-                        .collect())
-                },
-                5000,
-            )?;
-            assert_eq!(records.len(), total);
-            assert_eq!(pages.len(), total / 50 + 1);
+        for capacity in [20, 50] {
+            for total in [0, 49, 50, 51, 100, 102, 5000] {
+                let mut pages = Vec::new();
+                let records = collect_pages(
+                    |page| {
+                        pages.push(page);
+                        let start = (page - 1) * capacity;
+                        Ok((start..(start + capacity).min(total))
+                            .map(|number| json!({"number":number}))
+                            .collect())
+                    },
+                    5000,
+                )?;
+                assert_eq!(records.len(), total);
+                assert_eq!(pages.len(), total.div_ceil(capacity) + 1);
+            }
         }
         assert!(collect_pages(|_| Ok(vec![json!({}); 50]), 100).is_err());
         Ok(())

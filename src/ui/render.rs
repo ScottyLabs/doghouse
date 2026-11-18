@@ -920,8 +920,8 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
                         },
                         TEXT,
                     ),
-                    label("m", BLUE),
-                    label(" move  ", TEXT),
+                    label("Space", BLUE),
+                    label(" task actions  ", TEXT),
                     label("c", BLUE),
                     label(" comment  ", TEXT),
                     label("z", BLUE),
@@ -1058,6 +1058,8 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
             PickKind::Project => "Governance projects",
             PickKind::Repository => "Project repositories",
             PickKind::Source => "Show items",
+            PickKind::Actions => "Task actions",
+            PickKind::Priority => "Choose priority",
         };
         f.render_widget(block(title, true), rect);
         f.render_widget(
@@ -1156,7 +1158,7 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
                 "Forget local project",
                 "Type remove / keeps files, tasks, and runs / Esc cancels",
             ),
-            'e' => ("Edit issue title", "Enter saves on GCD  ·  Esc cancel"),
+            'e' => ("Edit title", "Enter saves on GCD  ·  Esc cancel"),
             'p' => (
                 "GCD priority",
                 "high / normal / low  ·  Enter applies existing label  ·  Esc cancel",

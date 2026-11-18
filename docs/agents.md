@@ -65,4 +65,4 @@ A plan file is a JSON array with `title` and `body` fields. A human accepts or d
 
 GCD issue edits in the TUI are explicit writes through Collar. Writes are not automatically retried. If completion is uncertain, inspect the issue before another attempt. A local revision or claim grants no permission to push, merge, publish, or close remote issues.
 
-Use `SHEPHERD_COLLAR` to select a specific Collar binary during integration testing. Production uses `collar` on PATH. No separate tokens or direct credential-store reads are required. Verification of remote writes uses a fake executable and temporary files; never test them against live repositories.
+Forge reads and writes use Collar's Rust library with its host-bound authentication. `SHEPHERD_COLLAR` selects the CLI used for canonical Governance discovery; the Nix package pins it. No separate tokens or direct credential-store reads are required. Verification of remote writes uses loopback HTTP fixtures and temporary files; never test them against live repositories.
