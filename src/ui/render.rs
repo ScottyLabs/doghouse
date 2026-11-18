@@ -906,7 +906,11 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
             )),
             if ui.agent_view {
                 Line::from(label(
-                    "Enter Open / Space Actions / r Continue / H History / a Tasks / q Quit (agents continue)",
+                    if area.width >= 90 {
+                        "Enter Open / Space Actions / n New / x Stop / d Delete / ? Help"
+                    } else {
+                        "Enter Open / Space Actions / d Delete / ? Help"
+                    },
                     BLUE,
                 ))
             } else {

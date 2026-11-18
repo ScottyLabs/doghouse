@@ -100,6 +100,7 @@ pub(crate) struct Ui {
     stop_run: Option<String>,
     recover_run: Option<String>,
     agent_actions: Option<agents::SessionActions>,
+    subagents: Option<agents::SubagentPanel>,
     run_history: bool,
     error_popup: bool,
 }
@@ -124,7 +125,29 @@ impl Ui {
             .visible_runs(store)
             .get(self.run_row)
             .map(|run| run.conversation_key());
+        let child = self.subagents.as_ref().and_then(|panel| {
+            self.runs
+                .iter()
+                .find(|run| run.id == panel.parent)
+                .and_then(|run| {
+                    crate::agents::subagents::ordered(&run.subagents)
+                        .get(panel.row)
+                        .map(|agent| agent.id.clone())
+                })
+        });
         self.runs = runs;
+        if let Some(panel) = &mut self.subagents
+            && let Some(run) = self.runs.iter().find(|run| run.id == panel.parent)
+        {
+            panel.row = child
+                .and_then(|id| {
+                    crate::agents::subagents::ordered(&run.subagents)
+                        .iter()
+                        .position(|agent| agent.id == id)
+                })
+                .unwrap_or(panel.row)
+                .min(run.subagents.len().saturating_sub(1));
+        }
         if let Some(key) = selected
             && let Some(row) = self
                 .visible_runs(store)
@@ -727,7 +750,8 @@ fn run_ui(
                         "Conversation is open / Enter returns / Space actions / q leaves agents running"
                             .into()
                     } else {
-                        "Returned from the native conversation / Enter opens it again / v last automated result".into()
+                        "Returned from the native conversation / o opens it again / Tab last result"
+                            .into()
                     }
                 }
                 Err(error) => format!("{error:#}"),
@@ -1385,6 +1409,44 @@ mod tests {
                             (0..w).all(|x| !buffer[(x, y)].modifier.contains(Modifier::REVERSED))
                         );
                     }
+                }
+            }
+            for details in [false, true] {
+                let mut run = crate::agents::Run::fixture(crate::agents::Provider::Codex);
+                run.subagents = (0..12)
+                    .map(|index| crate::agents::subagents::Subagent {
+                        id: format!("child-{index}"),
+                        parent_id: None,
+                        tool_call_id: None,
+                        name: format!("Review child {index}"),
+                        prompt: "Review the changed code".into(),
+                        status: crate::agents::subagents::Status::Working,
+                        result: "Reported result".into(),
+                        updated_at: now(),
+                    })
+                    .collect();
+                let ui = Ui {
+                    agent_view: true,
+                    run_all: true,
+                    subagents: Some(agents::SubagentPanel {
+                        parent: run.id.clone(),
+                        row: 11,
+                        details,
+                    }),
+                    runs: vec![run],
+                    ..Ui::default()
+                };
+                terminal.draw(|f| ui.draw(f, &store))?;
+                let text = terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>();
+                assert!(text.contains("Subagents"));
+                if !details {
+                    assert!(text.contains("Review child 11"));
                 }
             }
             let mut ui = Ui::default();

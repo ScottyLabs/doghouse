@@ -20,7 +20,11 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let temporary = tempfile::tempdir().unwrap();
+        // Unix socket paths are limited; nested Nix TMPDIRs can exceed that limit.
+        let temporary = tempfile::Builder::new()
+            .prefix("shepherd-")
+            .tempdir_in("/tmp")
+            .unwrap();
         let board = temporary.path().join("board");
         let registry = temporary.path().join("registry");
         let project_directory = temporary.path().join("project");
@@ -31,6 +35,7 @@ case "$1" in
 exec)
     cat >/dev/null
     printf '%s\n' '{"type":"thread.started","thread_id":"fixture-session"}'
+    printf '%s\n' '{"type":"item.completed","item":{"type":"collab_tool_call","tool":"spawn_agent","sender_thread_id":"fixture-session","receiver_thread_ids":["child-fixture"],"prompt":"Review child fixtures","agents_states":{"child-fixture":{"status":"running","message":"Checking fixtures"}}}}'
     while [ ! -f "$SHEPHERD_TEST_FINISH" ]; do sleep 0.05; done
     printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"Fixture finished"}}' '{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":3}}'
     ;;
@@ -267,8 +272,8 @@ fn quitting_and_killing_clients_preserves_workers_and_another_board_can_stop_the
         let mut viewer = fixture.client(Some(&fixture.temporary.path().join("other-board")));
         viewer.send(b"a");
         viewer.wait_for("Durable session fixture");
-        viewer.send(b"s");
-        viewer.wait_for("Stop this agent?");
+        viewer.send(b"x");
+        viewer.wait_for("Stop session and all subagents?");
         viewer.send(b"\r");
         Fixture::wait_state(&path, "stopped");
     }
@@ -284,7 +289,7 @@ fn completed_session_can_open_and_detach_native_conversation_across_client_exit(
     let mut viewer = fixture.client(None);
     viewer.wait_for("Durable session fixture");
     viewer.send(b"a");
-    viewer.wait_for("q Quit (agents continue)");
+    viewer.wait_for("Space Actions");
     viewer.send(b"\r");
     viewer.wait_for("NATIVE-CONVERSATION-READY");
     viewer.send(b"part");
@@ -296,20 +301,20 @@ fn completed_session_can_open_and_detach_native_conversation_across_client_exit(
     let mut next = fixture.client(None);
     next.wait_for("Durable session fixture");
     next.send(b"a");
-    next.wait_for("q Quit (agents continue)");
-    next.send(b"\r");
+    next.wait_for("Space Actions");
+    next.send(b"o");
     next.send(b"ial\r");
     next.wait_for("REPLY:partial:1");
     drop(next);
     let mut attached_again = fixture.client(None);
     attached_again.wait_for("Durable session fixture");
     attached_again.send(b"a");
-    attached_again.wait_for("q Quit (agents continue)");
-    attached_again.send(b"\r");
+    attached_again.wait_for("Space Actions");
+    attached_again.send(b"o");
     attached_again.send(b"again\r");
     attached_again.wait_for("REPLY:again:2");
     attached_again.send(&[26]);
-    attached_again.send(b"s\r");
+    attached_again.send(b"x\r");
     Fixture::wait_state(&path, "stopped");
 }
 
@@ -336,15 +341,15 @@ fn worker_interruption_preserves_files_and_requires_confirmation_to_recover() {
     let mut viewer = fixture.client(None);
     viewer.wait_for("Durable session fixture");
     viewer.send(b"a");
-    viewer.wait_for("q Quit (agents continue)");
-    viewer.send(b"\r");
+    viewer.wait_for("Space Actions");
+    viewer.send(b"o");
     viewer.wait_for("Recover interrupted conversation?");
     assert!(!path.parent().unwrap().join("terminal.socket").exists());
     viewer.send(b"\r");
     viewer.wait_for("NATIVE-CONVERSATION-READY");
     assert_eq!(fs::read_to_string(note).unwrap(), "Keep this work");
     viewer.send(&[26]);
-    viewer.send(b"s\r");
+    viewer.send(b"x\r");
     Fixture::wait_state(&path, "stopped");
 }
 
@@ -369,7 +374,7 @@ fn killed_worker_cannot_allow_a_second_agent_to_use_the_orphaned_checkout() {
         nix::unistd::Pid::from_raw(i32::try_from(metadata["agent_pid"].as_u64().unwrap()).unwrap());
     nix::sys::signal::killpg(agent, nix::sys::signal::Signal::SIGTERM).unwrap();
     viewer.wait_for("Interrupted");
-    viewer.send(b"\r");
+    viewer.send(b"o");
     viewer.wait_for("Recover interrupted conversation?");
     viewer.send(b"\x1b");
 }
@@ -389,7 +394,7 @@ fn legacy_session_records_are_registered_without_moving_their_files() {
     let mut viewer = fixture.client(None);
     viewer.wait_for("Durable session fixture");
     viewer.send(b"a");
-    viewer.wait_for("q Quit (agents continue)");
+    viewer.wait_for("Space Actions");
     let alias = fixture.registry.join("agents").join(identifier);
     assert!(alias.symlink_metadata().unwrap().file_type().is_symlink());
     assert_eq!(
@@ -399,4 +404,92 @@ fn legacy_session_records_are_registered_without_moving_their_files() {
     let saved: Value = serde_json::from_slice(&fs::read(alias.join("run.json")).unwrap()).unwrap();
     assert_eq!(saved["directory"], record["directory"]);
     assert_eq!(saved["session_id"], "fixture-session");
+}
+
+#[test]
+fn subagents_are_shared_and_inspecting_them_or_refreshing_never_stops_parent() {
+    let fixture = Fixture::new();
+    let (mut client, path) = fixture.launch();
+    client.send(b"\x1b[C");
+    client.wait_for("Review child fixtures");
+    client.send(b"\r");
+    client.wait_for("child-fixture");
+    client.send(b"x");
+    let record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(record["state"], "running");
+    assert_eq!(record["subagents"][0]["id"], "child-fixture");
+    assert!(!path.parent().unwrap().join("stop-request").exists());
+    client.send(b"\x1b");
+    client.send(b"\x1b");
+    client.send(b"s");
+    client.send(b" ");
+    client.wait_for("Session actions");
+    assert!(!path.parent().unwrap().join("stop-request").exists());
+    drop(client);
+    let mut viewer = fixture.client(Some(&fixture.temporary.path().join("other-board")));
+    viewer.send(b"a");
+    viewer.wait_for("Durable session fixture");
+    viewer.send(b"\x1b[C");
+    viewer.wait_for("Review child fixtures");
+    viewer.send(b"\x1b");
+    viewer.send(b"x");
+    viewer.wait_for("Stop session and all subagents?");
+    viewer.send(b"\r");
+    Fixture::wait_state(&path, "stopped");
+}
+
+#[test]
+fn another_window_can_confirm_deleting_a_working_session() {
+    let fixture = Fixture::new();
+    let (client, path) = fixture.launch();
+    let mut viewer = fixture.client(Some(&fixture.temporary.path().join("other-board")));
+    viewer.send(b"a");
+    viewer.wait_for("Durable session fixture");
+    viewer.send(b"d");
+    viewer.wait_for("Delete agent run");
+    // Cancel leaves the working session untouched.
+    viewer.send(b"\x1b");
+    viewer.send(b"d");
+    viewer.wait_for("Delete agent run");
+    viewer.send(b"\r");
+    drop(client);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while path.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        !path.exists(),
+        "Shared deletion should stop and remove the session"
+    );
+    assert!(fixture.temporary.path().join("project").exists());
+}
+
+#[test]
+fn shared_board_open_waits_for_an_update_instead_of_rejecting_another_window() {
+    let fixture = Fixture::new();
+    let lock = File::options()
+        .read(true)
+        .write(true)
+        .open(fixture.board.join("rust.lock"))
+        .unwrap();
+    fs2::FileExt::lock_exclusive(&lock).unwrap();
+    let mut child = fixture
+        .command()
+        .args(["local", "list"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(150));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "Another window should wait for the short board update"
+    );
+    fs2::FileExt::unlock(&lock).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

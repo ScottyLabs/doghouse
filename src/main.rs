@@ -220,8 +220,7 @@ impl Store {
             .read(true)
             .write(true)
             .open(dir.join("rust.lock"))?;
-        lock.try_lock_exclusive()
-            .context("Another Shepherd process is using this workspace")?;
+        FileExt::lock_exclusive(&lock).context("Wait for the shared workspace update")?;
         ensure!(
             !dir.join("server.lock").exists(),
             "Stop the earlier JavaScript server before opening this workspace"

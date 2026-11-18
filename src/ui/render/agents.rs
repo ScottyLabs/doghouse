@@ -71,6 +71,13 @@ fn lines_for(run: &Run, output: bool, width: u16) -> Vec<Line<'static>> {
             MUTED,
         )),
     ];
+    lines.push(Line::from(label(
+        format!(
+            "Subagents   {} reported / Right opens their details",
+            run.subagents.len()
+        ),
+        BLUE,
+    )));
     if let Some(model) = &run.model {
         lines.push(Line::from(label(
             format!("Model       {}", clean(model)),
@@ -120,7 +127,7 @@ fn lines_for(run: &Run, output: bool, width: u16) -> Vec<Line<'static>> {
     if run.state == State::Interrupted {
         lines.push(Line::from(label(
             if run.session_id.is_some() {
-                "Enter recovers the saved conversation / r continues with a new goal"
+                "o recovers the saved conversation / r continues with a new goal"
             } else {
                 "No native conversation ID was saved. Files are retained; A starts a new session."
             },
@@ -144,7 +151,7 @@ fn lines_for(run: &Run, output: bool, width: u16) -> Vec<Line<'static>> {
     if !run.result.is_empty() {
         lines.push(Line::raw(""));
         lines.push(Line::from(label(
-            "Enter  open conversation   /   v read result   /   d review diff",
+            "Enter Open / Space Actions / d Delete / Tab Result",
             BLUE,
         )))
     }
@@ -259,9 +266,9 @@ pub(super) fn view(ui: &Ui, f: &mut ratatui::Frame, store: &Store, area: Rect) {
             .block(
                 block(
                     if ui.run_output {
-                        "Result / v activity / Enter conversation"
+                        "Result / Tab activity / o conversation"
                     } else {
-                        "Session / Enter opens / Space actions"
+                        "Session / Enter open / Space actions / Right subagents"
                     },
                     false,
                 )
@@ -272,38 +279,153 @@ pub(super) fn view(ui: &Ui, f: &mut ratatui::Frame, store: &Store, area: Rect) {
     }
 }
 pub(super) fn overlays(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
-    if let Some(menu) = &ui.agent_actions {
-        let row = menu.row;
-        let rect = popup(f.area(), 70, 14);
+    if let Some(panel) = &ui.subagents
+        && let Some(run) = ui.runs.iter().find(|run| run.id == panel.parent)
+    {
+        let rect = popup(f.area(), 100, 28);
         f.render_widget(Clear, rect);
-        let mut lines = vec![
-            Line::raw("Up/Down or j/k choose / Enter open / Esc back"),
-            Line::raw(""),
-        ];
-        for (index, (name, _)) in crate::ui::agents::session_actions(ui, store)
-            .iter()
-            .enumerate()
-        {
-            lines.push(Line::styled(
-                format!("{} {name}", if index == row { ">" } else { " " }),
-                if index == row {
-                    style(BLUE).add_modifier(Modifier::BOLD)
-                } else {
-                    style(TEXT)
-                },
-            ));
-        }
+        let inner = block("", true).inner(rect);
+        let regions = Layout::vertical([
+            Constraint::Length(4),
+            Constraint::Min(2),
+            Constraint::Length(3),
+        ])
+        .split(inner);
         f.render_widget(
-            Paragraph::new(lines)
-                .block(block("Session actions", true).padding(Padding::horizontal(1))),
+            block(format!("Subagents / {}", clean(&run.task_title)), true),
             rect,
         );
+        let hint = format!(
+            "o opens the parent conversation; {} manages individual children.\n{}",
+            run.provider.subagent_menu(),
+            if run.native_continued {
+                "Showing the last automated reports. Live activity is in the native conversation."
+            } else {
+                "Status and results below are the last reports received from the agent."
+            }
+        );
+        f.render_widget(
+            Paragraph::new(hint)
+                .wrap(Wrap { trim: false })
+                .style(style(MUTED)),
+            regions[0],
+        );
+        if panel.details {
+            if let Some(agent) = crate::agents::subagents::ordered(&run.subagents).get(panel.row) {
+                let mut lines = vec![
+                    Line::styled(
+                        if agent.name.is_empty() {
+                            agent.id.clone()
+                        } else {
+                            agent.name.clone()
+                        },
+                        style(TEXT).add_modifier(Modifier::BOLD),
+                    ),
+                    Line::raw(format!("{} / {}", agent.status.name(), agent.id)),
+                    Line::raw(""),
+                    Line::styled("Task", style(BLUE)),
+                ];
+                lines.extend(markdown::render(&agent.prompt, regions[1].width));
+                lines.push(Line::styled("Last reported result", style(BLUE)));
+                lines.extend(markdown::render(&agent.result, regions[1].width));
+                f.render_widget(
+                    Paragraph::new(lines)
+                        .wrap(Wrap { trim: false })
+                        .scroll((ui.run_scroll, 0)),
+                    regions[1],
+                );
+            }
+        } else if run.subagents.is_empty() {
+            f.render_widget(Paragraph::new(format!("No structured subagent reports have been received.\n\nOpen the parent conversation with o and use {} for its live subagents. This list does not mean there are no children.", run.provider.subagent_menu())).wrap(Wrap { trim:false }), regions[1]);
+        } else {
+            let items = crate::agents::subagents::ordered(&run.subagents)
+                .into_iter()
+                .map(|agent| {
+                    let indent =
+                        "  ".repeat(crate::agents::subagents::depth(&run.subagents, agent));
+                    ListItem::new(vec![
+                        Line::raw(format!(
+                            "{indent}{}",
+                            if agent.name.is_empty() {
+                                &agent.id
+                            } else {
+                                &agent.name
+                            }
+                        )),
+                        Line::styled(
+                            format!("{indent}{}", agent.status.name()),
+                            style(match agent.status {
+                                crate::agents::subagents::Status::Working
+                                | crate::agents::subagents::Status::Starting => BLUE,
+                                crate::agents::subagents::Status::Finished => GREEN,
+                                crate::agents::subagents::Status::Failed => Color::Red,
+                                crate::agents::subagents::Status::Interrupted
+                                | crate::agents::subagents::Status::Attention => AMBER,
+                                _ => MUTED,
+                            }),
+                        ),
+                        Line::raw(""),
+                    ])
+                })
+                .collect::<Vec<_>>();
+            let mut state = ListState::default().with_selected(Some(panel.row));
+            f.render_stateful_widget(
+                List::new(items)
+                    .highlight_symbol("> ")
+                    .highlight_style(style(TEXT).add_modifier(Modifier::REVERSED)),
+                regions[1],
+                &mut state,
+            );
+        }
+        f.render_widget(
+            Paragraph::new(vec![
+                Line::raw(if panel.details {
+                    "Page Up/Down scroll / Left or Esc back"
+                } else {
+                    "Up/Down choose / Enter inspect / Left or Esc back"
+                }),
+                Line::raw("o Manage in conversation / F5 Refresh"),
+                Line::raw(if run.subagents_omitted {
+                    "Report list capped; all children remain available in the native conversation."
+                } else {
+                    "Stopping a session affects the parent and its child tools."
+                }),
+            ])
+            .style(style(MUTED)),
+            regions[2],
+        );
     }
+    if let Some(menu) = &ui.agent_actions {
+        let row = menu.row;
+        let rect = popup(f.area(), 76, 16);
+        f.render_widget(Clear, rect);
+        let container = block("Session actions", true).padding(Padding::horizontal(1));
+        let inner = container.inner(rect);
+        f.render_widget(container, rect);
+        let regions = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).split(inner);
+        f.render_widget(
+            Paragraph::new("Up/Down choose / Enter apply / Esc back").wrap(Wrap { trim: false }),
+            regions[0],
+        );
+        let items = crate::ui::agents::session_actions(ui, store)
+            .into_iter()
+            .map(|(name, _)| ListItem::new(name))
+            .collect::<Vec<_>>();
+        let mut state = ListState::default().with_selected(Some(row));
+        f.render_stateful_widget(
+            List::new(items)
+                .highlight_symbol("> ")
+                .highlight_style(style(BLUE).add_modifier(Modifier::BOLD)),
+            regions[1],
+            &mut state,
+        );
+    }
+
     for (id, title, description) in [
         (
             &ui.stop_run,
-            "Stop this agent?",
-            "This stops its current work and child tools. Conversation history and checkout changes are retained. Quitting Shepherd instead keeps the session running.",
+            "Stop session and all subagents?",
+            "This stops the entire session, including its current work and child tools. Conversation history and checkout changes are retained. Quitting Shepherd instead keeps the session running.",
         ),
         (
             &ui.recover_run,
@@ -506,7 +628,7 @@ pub(super) fn overlays(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
                 Line::raw(if run.state == State::Unattached {
                     "Stop the old process and open its saved conversation in a persistent worker?"
                 } else {
-                    "Stop the current automated turn and open its saved conversation?"
+                    "Stop this automated turn and its child tools, then open the conversation?"
                 }),
                 Line::from(label(
                     "Saved history and files are retained. Unsent terminal input may be lost.",
@@ -523,6 +645,11 @@ pub(super) fn overlays(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
     if let Some(id) = &ui.delete_run
         && let Some(run) = ui.runs.iter().find(|run| run.id == *id)
     {
+        let stopping = ui.runs.iter().any(|candidate| {
+            (candidate.id == run.id
+                || (!ui.run_history && candidate.conversation_key() == run.conversation_key()))
+                && (candidate.state.active() || candidate.state == crate::agents::State::Unattached)
+        });
         let rect = popup(area, 82, 16);
         f.render_widget(Clear, rect);
         f.render_widget(
@@ -536,9 +663,11 @@ pub(super) fn overlays(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
                     MUTED,
                 )),
                 Line::raw(""),
-                Line::raw("Delete this run's Shepherd history and transcript?"),
+                Line::raw(if stopping {
+                    "Stop this session and its children, then delete its history?"
+                } else if ui.run_history { "Delete this turn's history and transcript?" } else { "Delete this session and its previous turns?" }),
                 Line::raw(
-                    "Project files, worktrees, native CLI sessions, and GCD comments are kept.",
+                    "Project files, worktrees, saved native conversations, and GCD comments are kept.",
                 ),
                 Line::raw(""),
                 Line::from(label(
@@ -546,7 +675,7 @@ pub(super) fn overlays(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
                     MUTED,
                 )),
                 Line::raw(""),
-                Line::from(label("Enter delete run / Esc cancel", BLUE)),
+                Line::from(label("Enter confirm / Esc cancel", BLUE)),
             ])
             .wrap(Wrap { trim: false })
             .block(block("Delete agent run", true).padding(Padding::new(2, 1, 1, 0))),

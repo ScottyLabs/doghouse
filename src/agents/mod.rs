@@ -18,6 +18,7 @@ use std::{
 };
 mod backend;
 mod interactive;
+pub(crate) mod subagents;
 pub(crate) mod worker;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -28,6 +29,12 @@ pub(crate) enum Provider {
     Claude,
 }
 impl Provider {
+    pub fn subagent_menu(self) -> &'static str {
+        match self {
+            Self::Codex => "/subagents",
+            Self::Claude => "/tasks",
+        }
+    }
     fn index(self) -> usize {
         match self {
             Self::Codex => 0,
@@ -147,6 +154,10 @@ pub(crate) struct Run {
     pub native_continued: bool,
     #[serde(default)]
     pub conversation: Option<String>,
+    #[serde(default)]
+    pub subagents: Vec<subagents::Subagent>,
+    #[serde(default)]
+    pub subagents_omitted: bool,
 }
 impl Run {
     pub fn conversation_key(&self) -> String {
@@ -201,6 +212,8 @@ impl Run {
             publication: "not-published".into(),
             native_continued: false,
             conversation: None,
+            subagents: Vec::new(),
+            subagents_omitted: false,
         }
     }
 }
@@ -223,7 +236,7 @@ fn lease(root: &std::path::Path, key: &str) -> Result<Lease> {
         .write(true)
         .open(directory.join(format!("{:016x}.lock", hash.finish())))?;
     file.try_lock_exclusive()
-        .context("Another Shepherd window is using this task or checkout")?;
+        .context("This operation is busy; refresh and try again")?;
     Ok(Lease(file))
 }
 struct Active {
@@ -621,6 +634,8 @@ impl Manager {
             publication: "not-published".into(),
             native_continued: false,
             conversation: Some(id.clone()),
+            subagents: Vec::new(),
+            subagents_omitted: false,
         };
         let mut run = run;
         run.event("Setup", &if instructions.is_empty() { "No AGENTS.md in the project or its parents; agent will inspect project documentation".into() } else { format!("Loaded project instructions: {}",instructions.iter().map(|(path,_)|path.display().to_string()).collect::<Vec<_>>().join(", ")) });
@@ -668,11 +683,15 @@ impl Manager {
             !goal.trim().is_empty() && goal.len() <= 6000,
             "Enter a follow-up goal"
         );
+        ensure!(
+            !self.root.join(id).join("delete-request").exists(),
+            "This session is being deleted"
+        );
         let mut previous = self.read_record(id)?;
         worker::reconcile(&self.root, &mut previous)?;
         ensure!(
             !previous.state.active(),
-            "The previous run is still active in another window"
+            "This conversation still has a working turn; open it or stop it before continuing"
         );
         ensure!(
             previous.base_commit.is_empty()
@@ -930,6 +949,7 @@ impl Manager {
         if self.refreshed_at.elapsed() > Duration::from_secs(1) {
             self.poll_consoles()?;
             self.refresh_external()?;
+            self.finish_deletions()?;
         }
         let mut dirty = std::collections::BTreeSet::new();
         for _ in 0..512 {
@@ -1032,6 +1052,84 @@ impl Manager {
             self.persist(id)?;
         }
         Ok(())
+    }
+    fn finish_deletions(&mut self) -> Result<()> {
+        let pending: Vec<_> = self
+            .runs
+            .keys()
+            .filter(|id| self.root.join(id).join("delete-request").is_file())
+            .cloned()
+            .collect();
+        for id in pending {
+            if self.active.contains_key(&id)
+                || self.consoles.contains_key(&id)
+                || worker::live(&self.root, &id)?
+                || self.console_available(&id)
+            {
+                continue;
+            }
+            let result = (|| -> Result<()> {
+                let mut run = self.read_record(&id)?;
+                worker::reconcile(&self.root, &mut run)?;
+                if !run.state.active() && run.state != State::Unattached {
+                    self.delete(&id)?;
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                // Another window may finish the same request or acquire its lock first.
+                if !error.downcast_ref::<io::Error>().is_some_and(|error| {
+                    matches!(
+                        error.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::WouldBlock
+                    )
+                }) {
+                    return Err(error);
+                }
+            }
+        }
+        Ok(())
+    }
+    pub fn request_delete_session(&mut self, id: &str) -> Result<()> {
+        self.refresh_external()?;
+        let key = self.get(id)?.conversation_key();
+        let ids: Vec<_> = self
+            .runs
+            .values()
+            .filter(|run| run.conversation_key() == key)
+            .map(|run| run.id.clone())
+            .collect();
+        for id in &ids {
+            ensure!(
+                self.read_record(id)?.publication != "publishing",
+                "Wait for result publication to finish"
+            );
+        }
+        for id in ids {
+            self.request_delete(&id)?;
+        }
+        Ok(())
+    }
+    pub fn request_delete(&mut self, id: &str) -> Result<()> {
+        let mut run = self.read_record(id)?;
+        worker::reconcile(&self.root, &mut run)?;
+        ensure!(
+            run.publication != "publishing",
+            "Wait for result publication to finish"
+        );
+        if run.state.active() || run.state == State::Unattached {
+            self.stop(id)?;
+        }
+        let mut request = tempfile::NamedTempFile::new_in(self.root.join(id))?;
+        request.write_all(b"delete\n")?;
+        request.as_file().sync_all()?;
+        request.persist(self.root.join(id).join("delete-request"))?;
+        self.finish_deletions()
+    }
+    pub fn refresh(&mut self) -> Result<()> {
+        self.poll()?;
+        self.refresh_external()?;
+        self.finish_deletions()
     }
     pub fn take_terminal_reset(&mut self) -> bool {
         std::mem::take(&mut self.terminal_reset)
@@ -1158,14 +1256,21 @@ impl Manager {
         self.persist(id)
     }
     pub fn delete(&mut self, id: &str) -> Result<()> {
-        let run = self.read_record(id)?;
         ensure!(
-            !self.active.contains_key(id) && !run.state.active() && run.state != State::Unattached,
-            "Stop this agent in its owning window and wait for it to finish before deleting its history"
+            !self.active.contains_key(id) && !self.consoles.contains_key(id),
+            "Stop this session before deleting its history"
         );
-        let _checkout = lease(&self.root, &format!("checkout:{}", run.directory.display()))?;
+        // History belongs to a turn, not its checkout. A newer turn may still use it.
+        let _launch = lease(&self.root, &format!("launch:{id}"))?;
+        ensure!(
+            !worker::live(&self.root, id)?,
+            "Wait for this session to stop"
+        );
+        let mut run = self.read_record(id)?;
+        worker::reconcile(&self.root, &mut run)?;
+        let _worker = lease(&self.root, &format!("worker:{id}"))?;
         let _publication = lease(&self.root, &format!("publish:{id}"))?;
-        let run = self.read_record(id)?;
+        run.publication = self.read_record(id)?.publication;
         ensure!(
             !run.state.active() && run.state != State::Unattached,
             "This run is still active"
@@ -1182,6 +1287,7 @@ impl Manager {
         }
         fs::remove_file(directory.join("run.json")).context("Delete run history")?;
         self.runs.remove(id);
+        let _ = fs::remove_file(directory.join("delete-request"));
         // Never remove checkout contents, native CLI sessions, or shared comments.
         let _ = fs::remove_dir(directory);
         Ok(())
@@ -1760,6 +1866,62 @@ mod tests {
         other.delete(&id)?;
         manager.refresh_external()?;
         assert!(manager.get(&id).is_err());
+        Ok(())
+    }
+    #[test]
+    fn history_deletion_does_not_lock_a_newer_turns_checkout() -> Result<()> {
+        let (_temporary, mut manager, source) = setup(CODEX)?;
+        let id = manager.start(
+            &task(),
+            Provider::Codex,
+            Mode::Implement,
+            source,
+            "Inspect".into(),
+        )?;
+        finished(&mut manager)?;
+        let checkout = manager.get(&id)?.directory.clone();
+        let _busy = lease(&manager.root, &format!("checkout:{}", checkout.display()))?;
+        manager.delete(&id)?;
+        assert!(checkout.exists());
+        Ok(())
+    }
+    #[test]
+    fn deletion_requests_are_shared_and_survive_the_requesting_window() -> Result<()> {
+        let (temporary, mut owner, source) = setup("sleep 30\n")?;
+        let id = owner.start(
+            &task(),
+            Provider::Codex,
+            Mode::Plan,
+            source.clone(),
+            "Inspect".into(),
+        )?;
+        let mut viewer = Manager::open(&temporary.path().join("cache"))?;
+        viewer.request_delete_session(&id)?;
+        assert!(owner.root.join(&id).join("delete-request").exists());
+        drop(viewer);
+        finished(&mut owner)?;
+        owner.refresh()?;
+        assert!(!owner.root.join(&id).join("run.json").exists());
+        assert!(source.exists());
+        Ok(())
+    }
+    #[test]
+    fn deleting_a_session_removes_all_its_turns() -> Result<()> {
+        let (_temporary, mut manager, source) = setup(CODEX)?;
+        let first = manager.start(
+            &task(),
+            Provider::Codex,
+            Mode::Plan,
+            source.clone(),
+            "Inspect".into(),
+        )?;
+        finished(&mut manager)?;
+        let next = manager.resume(&first, "Follow up".into())?;
+        finished(&mut manager)?;
+        manager.request_delete_session(&next)?;
+        assert!(manager.get(&first).is_err());
+        assert!(manager.get(&next).is_err());
+        assert!(source.exists());
         Ok(())
     }
     #[test]

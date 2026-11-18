@@ -673,7 +673,7 @@ pub(super) fn key(
             target(ui, &task)?;
             ui.moving = Some(ui.column)
         }
-        KeyCode::Char('s') => {
+        KeyCode::Char('s') | KeyCode::F(5) => {
             if ui.my_work {
                 ui.personal_refresh(sender)?;
             } else {

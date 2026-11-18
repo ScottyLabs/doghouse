@@ -7,6 +7,35 @@ pub(super) struct SessionActions {
     pub state: crate::agents::State,
     pub row: usize,
 }
+pub(super) struct SubagentPanel {
+    pub parent: String,
+    pub row: usize,
+    pub details: bool,
+}
+fn open_conversation(ui: &mut Ui, manager: &Manager, id: &str) -> Result<()> {
+    ensure!(!ui.offline, "Offline mode cannot open a model session");
+    ensure!(!ui.writing, "Wait for the GCD write to finish");
+    let key = manager.get(id)?.conversation_key();
+    let run = manager
+        .snapshots()
+        .into_iter()
+        .find(|run| run.conversation_key() == key)
+        .context("Session no longer available")?;
+    ensure!(
+        run.session_id.is_some(),
+        "No native session was saved. Choose New session from actions."
+    );
+    if run.state == crate::agents::State::Interrupted {
+        ui.recover_run = Some(run.id);
+    } else if run.state == crate::agents::State::Unattached
+        || (run.state.active() && !manager.is_detached(&run.id))
+    {
+        ui.take_over = Some(run.id);
+    } else {
+        ui.handoff = Some(run.id);
+    }
+    Ok(())
+}
 pub(super) struct Launch {
     pub task: Value,
     pub provider: Provider,
@@ -117,24 +146,52 @@ pub(super) fn session_actions(ui: &Ui, store: &Store) -> Vec<(&'static str, KeyC
         return Vec::new();
     };
     [
-        ("Open conversation / Enter", KeyCode::Enter),
+        ("Open conversation / Enter", KeyCode::Char('o')),
+        ("Subagents / Right", KeyCode::Right),
+        ("New session / n", KeyCode::Char('n')),
         ("Continue with a follow-up / r", KeyCode::Char('r')),
-        ("Stop current work / s", KeyCode::Char('s')),
-        ("Activity or last result / v", KeyCode::Char('v')),
-        ("Review changes / d", KeyCode::Char('d')),
+        ("Stop session and all subagents / x", KeyCode::Char('x')),
+        ("Activity or last result / Tab", KeyCode::Tab),
+        ("Review changes / v", KeyCode::Char('v')),
         ("Show or hide previous turns / H", KeyCode::Char('H')),
         ("Return to task / t", KeyCode::Char('t')),
+        ("Refresh sessions / F5", KeyCode::F(5)),
+        ("Open issue in browser", KeyCode::Char('O')),
+        ("Review result for publication", KeyCode::Char('P')),
+        ("Remove clean checkout", KeyCode::Char('X')),
+        (
+            if ui.run_history {
+                "Delete turn / d"
+            } else {
+                "Delete session / d"
+            },
+            KeyCode::Char('D'),
+        ),
     ]
     .into_iter()
     .filter(|(_, code)| match code {
-        KeyCode::Char('s') => run.state.active() || run.state == crate::agents::State::Unattached,
+        KeyCode::Char('x') => run.state.active() || run.state == crate::agents::State::Unattached,
         KeyCode::Char('r') => {
             !run.state.active()
                 && run.state != crate::agents::State::Unattached
                 && run.session_id.is_some()
         }
-        KeyCode::Char('d') => run.mode == Mode::Implement,
-        KeyCode::Enter => run.session_id.is_some(),
+        KeyCode::Char('v') => run.mode == Mode::Implement,
+        KeyCode::Char('X') => {
+            run.mode == Mode::Implement
+                && !run.state.active()
+                && run.state != crate::agents::State::Unattached
+        }
+        KeyCode::Char('o') => run.session_id.is_some(),
+        KeyCode::Char('O') => run.task_number.is_some(),
+        KeyCode::Char('P') => {
+            run.task_number.is_some()
+                && !run.result.trim().is_empty()
+                && !run.native_continued
+                && !run.state.active()
+                && run.state != crate::agents::State::Unattached
+                && run.publication == "not-published"
+        }
         _ => true,
     })
     .collect()
@@ -146,6 +203,63 @@ pub(super) fn key(
     sender: &Sender<Job>,
     manager: &mut Manager,
 ) -> Result<bool> {
+    if let Some(mut panel) = ui.subagents.take() {
+        let run = ui
+            .runs
+            .iter()
+            .find(|run| run.id == panel.parent)
+            .context("Parent session no longer available")?;
+        match key.code {
+            KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') if panel.details => {
+                panel.details = false;
+                ui.run_scroll = 0;
+            }
+            KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => return Ok(true),
+            KeyCode::Up | KeyCode::Char('k') if !panel.details => {
+                panel.row = panel.row.saturating_sub(1)
+            }
+            KeyCode::Down | KeyCode::Char('j') if !panel.details => {
+                panel.row = (panel.row + 1).min(run.subagents.len().saturating_sub(1))
+            }
+            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(' ') => {
+                panel.details = !run.subagents.is_empty();
+                ui.run_scroll = 0;
+            }
+            KeyCode::PageDown if panel.details => ui.run_scroll = ui.run_scroll.saturating_add(8),
+            KeyCode::PageUp if panel.details => ui.run_scroll = ui.run_scroll.saturating_sub(8),
+            KeyCode::PageDown => {
+                panel.row = (panel.row + 8).min(run.subagents.len().saturating_sub(1))
+            }
+            KeyCode::PageUp => panel.row = panel.row.saturating_sub(8),
+            KeyCode::Home if panel.details => ui.run_scroll = 0,
+            KeyCode::Home => {
+                panel.row = 0;
+                ui.run_scroll = 0;
+            }
+            KeyCode::End if !panel.details => panel.row = run.subagents.len().saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') if panel.details => {
+                ui.run_scroll = ui.run_scroll.saturating_add(1)
+            }
+            KeyCode::Up | KeyCode::Char('k') if panel.details => {
+                ui.run_scroll = ui.run_scroll.saturating_sub(1)
+            }
+            KeyCode::Char('o') => {
+                let id = panel.parent.clone();
+                open_conversation(ui, manager, &id)?;
+                return Ok(true);
+            }
+            KeyCode::Char('s') | KeyCode::F(5) => {
+                manager.refresh()?;
+                ui.refresh_runs(store, manager.snapshots());
+            }
+            KeyCode::Char('x') => {
+                ui.message = "To stop only a child, open its parent conversation with o and use the native subagent controls.".into();
+            }
+            _ => {}
+        }
+        ui.subagents = Some(panel);
+        return Ok(true);
+    }
     if let Some(id) = ui.stop_run.clone() {
         match key.code {
             KeyCode::Esc => ui.stop_run = None,
@@ -183,6 +297,26 @@ pub(super) fn key(
             KeyCode::Up | KeyCode::Char('k') => row = row.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => {
                 row = (row + 1).min(actions.len().saturating_sub(1))
+            }
+            KeyCode::Home => row = 0,
+            KeyCode::End => row = actions.len().saturating_sub(1),
+            KeyCode::PageDown => row = (row + 8).min(actions.len().saturating_sub(1)),
+            KeyCode::PageUp => row = row.saturating_sub(8),
+            KeyCode::Char(' ') => return Ok(true),
+            code if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && actions.iter().any(|(_, shortcut)| {
+                    *shortcut
+                        == match code {
+                            KeyCode::Delete | KeyCode::Char('d') => KeyCode::Char('D'),
+                            KeyCode::Char('s') => KeyCode::F(5),
+                            KeyCode::Char('l') => KeyCode::Right,
+                            other => other,
+                        }
+                }) =>
+            {
+                return self::key(ui, store, key, sender, manager);
             }
             KeyCode::Enter => {
                 let (_, code) = actions.get(row).context("Select an action")?;
@@ -224,14 +358,18 @@ pub(super) fn key(
         match key.code {
             KeyCode::Esc => ui.delete_run = None,
             KeyCode::Enter => {
-                manager.delete(&id)?;
+                if ui.run_history {
+                    manager.request_delete(&id)?;
+                } else {
+                    manager.request_delete_session(&id)?;
+                }
                 ui.delete_run = None;
                 ui.runs = manager.snapshots();
                 ui.run_row = ui
                     .run_row
                     .min(ui.visible_runs(store).len().saturating_sub(1));
                 ui.run_scroll = 0;
-                ui.message="Deleted run history and transcript. Checkouts, native sessions, and GCD comments are retained.".into();
+                ui.message="Deletion requested. Working turns stop first; project files and checkouts are kept.".into();
             }
             _ => {}
         }
@@ -404,7 +542,7 @@ pub(super) fn key(
                         .position(|run| run.id == id)
                         .unwrap_or(0);
                     ui.message = format!(
-                        "{} session is working. Enter opens its conversation; q leaves it running.",
+                        "{} session is working. Enter opens its conversation; Space shows actions; q leaves it running.",
                         form.provider.name()
                     );
                     ui.error = false;
@@ -423,6 +561,12 @@ pub(super) fn key(
         match key.code {
             KeyCode::Char('d') => {
                 ui.run_scroll = ui.run_scroll.saturating_add(6);
+                return Ok(true);
+            }
+            KeyCode::Char('r') => {
+                manager.refresh()?;
+                ui.refresh_runs(store, manager.snapshots());
+                ui.message = "Shared sessions refreshed".into();
                 return Ok(true);
             }
             KeyCode::Char('u') => {
@@ -493,11 +637,11 @@ pub(super) fn key(
             let run = selected_run(ui, store)?;
             launch(ui, store, manager, Some(run.id))?;
         }
-        KeyCode::Char('s') => {
+        KeyCode::Char('x') => {
             let run = selected_run(ui, store)?;
             ensure!(
                 run.state.active() || run.state == crate::agents::State::Unattached,
-                "This session is not working. Enter opens its saved conversation."
+                "This session is not working. Press o to open its saved conversation."
             );
             ui.stop_run = Some(run.id);
         }
@@ -592,45 +736,43 @@ pub(super) fn key(
                 .status()?;
             ensure!(status.success(), "Browser launch failed");
         }
-        KeyCode::Enter => {
-            ensure!(!ui.offline, "Offline mode cannot open a model session");
-            ensure!(!ui.writing, "Wait for the GCD write to finish");
+        KeyCode::Enter | KeyCode::Char('o') => {
             let run = selected_run(ui, store)?;
-            ensure!(
-                run.session_id.is_some(),
-                "This run has no native session. Press A to start a new agent"
-            );
-            if run.state == crate::agents::State::Interrupted {
-                ui.recover_run = Some(run.id);
-            } else if run.state == crate::agents::State::Unattached
-                || (run.state.active() && !manager.is_detached(&run.id))
-            {
-                ui.take_over = Some(run.id);
-            } else {
-                ui.handoff = Some(run.id);
-            }
+            open_conversation(ui, manager, &run.id)?;
         }
         KeyCode::Char('v') => {
-            ui.run_output = !ui.run_output;
-            ui.run_scroll = 0;
-        }
-        KeyCode::Char('d') => {
             let run = selected_run(ui, store)?;
             ui.agent_diff = Some(manager.diff(&run.id)?);
             ui.run_scroll = 0;
         }
-        KeyCode::Delete | KeyCode::Char('D') => {
+        KeyCode::Delete | KeyCode::Char('d') | KeyCode::Char('D') => {
             let run = selected_run(ui, store)?;
-            ensure!(
-                !run.state.active() && run.state != crate::agents::State::Unattached,
-                "Stop the agent in its owning window before deleting its run history"
-            );
             ui.delete_run = Some(run.id);
         }
-        KeyCode::Char('x') => {
+        KeyCode::Char('X') => {
             let run = selected_run(ui, store)?;
             manager.cleanup(&run.id)?;
             ui.message = "Removed clean checkout; transcript and result retained".into();
+        }
+        KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('b') => {
+            let run = selected_run(ui, store)?;
+            ui.subagents = Some(SubagentPanel {
+                parent: run.id,
+                row: 0,
+                details: false,
+            });
+        }
+        KeyCode::Left | KeyCode::Char('h') => {
+            ui.agent_view = false;
+        }
+        KeyCode::Tab | KeyCode::BackTab => {
+            ui.run_output = !ui.run_output;
+            ui.run_scroll = 0;
+        }
+        KeyCode::Char('s') | KeyCode::F(5) => {
+            manager.refresh()?;
+            ui.refresh_runs(store, manager.snapshots());
+            ui.message = "Sessions refreshed / Enter actions / Right subagents".into();
         }
         KeyCode::Char('P') => {
             let run = selected_run(ui, store)?;
@@ -723,7 +865,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_requests_takeover_from_another_window() -> Result<()> {
+    fn space_shows_actions_without_interrupting_a_session() -> Result<()> {
         let temporary = tempfile::tempdir()?;
         let mut store = Store::open(temporary.path().into())?;
         let mut manager = Manager::open(&store.dir)?;
@@ -740,11 +882,12 @@ mod tests {
         key(
             &mut ui,
             &mut store,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
             &sender,
             &mut manager,
         )?;
-        assert_eq!(ui.take_over.as_deref(), Some(run.id.as_str()));
+        assert!(ui.agent_actions.is_some());
+        assert!(ui.take_over.is_none());
         assert!(ui.handoff.is_none());
         key(
             &mut ui,
@@ -754,6 +897,18 @@ mod tests {
             &mut manager,
         )?;
         assert!(ui.take_over.is_none());
+        for code in [KeyCode::Char(' '), KeyCode::Char('d')] {
+            key(
+                &mut ui,
+                &mut store,
+                KeyEvent::new(code, KeyModifiers::NONE),
+                &sender,
+                &mut manager,
+            )?;
+        }
+        assert!(ui.agent_actions.is_none());
+        assert_eq!(ui.delete_run.as_deref(), Some(run.id.as_str()));
+        assert!(ui.stop_run.is_none());
         Ok(())
     }
 

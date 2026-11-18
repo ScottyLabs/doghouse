@@ -104,7 +104,7 @@ impl Manager {
         ensure!(run.directory.is_dir(), "This checkout no longer exists");
         let native = backend::interactive_command(&run, &self.executables[run.provider.index()])?;
         let config = self.root.join(id).join("tmux.conf");
-        write_console_config(&config, b"set -g status off\nset -g prefix None\nset -g history-limit 2000\nset -g remain-on-exit on\nset -g destroy-unattached off\nbind-key -n C-z detach-client\n")?;
+        write_console_config(&config, console_configuration(run.provider).as_bytes())?;
         let console = Console {
             socket: self.console_socket(id),
             _leases: leases,
@@ -127,7 +127,7 @@ impl Manager {
         self.consoles.insert(id.into(), console);
         run.state = State::Detached;
         run.native_continued = true;
-        run.event("Conversation", "Native conversation available. Enter opens it; Ctrl+Z returns; quitting Shepherd keeps it open.");
+        run.event("Conversation", "Native conversation available. Press o to open it; Ctrl+Z returns; quitting Shepherd keeps it open.");
         self.runs.insert(id.into(), run);
         self.persist(id)?;
         Ok(())
@@ -219,6 +219,20 @@ impl Manager {
                 self.start_console(id, width, height)?;
             }
         }
+        let config = self.root.join(id).join("tmux.conf");
+        write_console_config(&config, console_configuration(run.provider).as_bytes())?;
+        let output = Command::new("tmux")
+            .arg("-S")
+            .arg(self.console_socket(id))
+            .env_remove("TMUX")
+            .arg("source-file")
+            .arg(config)
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "Could not update conversation controls: {}",
+            clean(&String::from_utf8_lossy(&output.stderr))
+        );
         if !shared {
             run.state = State::Running;
             run.native_continued = true;
@@ -252,7 +266,7 @@ impl Manager {
                         client.child.take();
                         ensure!(
                             code == 0 || !self.console_available(id),
-                            "Native terminal attachment exited with status {code}; the agent remains in the background. Press Enter to retry"
+                            "Native terminal attachment exited with status {code}; the agent remains in the background. Press o to retry"
                         );
                         break;
                     }
@@ -279,7 +293,7 @@ impl Manager {
         if !shared && self.consoles.contains_key(id) {
             if let Some(run) = self.runs.get_mut(id) {
                 run.state = State::Detached;
-                run.event("Conversation", "Detached; agent continues in background. Enter returns to the same terminal; s stops it.");
+                run.event("Conversation", "Detached; agent continues in background. o returns to the same terminal; x confirms stopping the session.");
             }
             self.persist(id)?;
         }
@@ -287,6 +301,12 @@ impl Manager {
     }
 }
 
+fn console_configuration(provider: Provider) -> String {
+    format!(
+        "set -g status on\nset -g status-style 'fg=default,bg=default'\nset -g status-format[0] ' Shepherd | Ctrl+Z: return | {}: subagents '\nset -g prefix None\nset -g history-limit 2000\nset -g remain-on-exit on\nset -g destroy-unattached off\nbind-key -n C-z detach-client\n",
+        provider.subagent_menu()
+    )
+}
 fn write_console_config(path: &std::path::Path, content: &[u8]) -> Result<()> {
     let mut file =
         tempfile::NamedTempFile::new_in(path.parent().context("Missing console directory")?)?;
@@ -335,7 +355,7 @@ mod tests {
         let mut viewer = Manager::open(temporary.path())?;
         viewer.detached = false;
         assert!(viewer.is_detached(&run.id));
-        assert!(viewer.get(&run.id)?.state.active());
+        assert_eq!(viewer.get(&run.id)?.state, State::Detached);
         let first_tty = nix::pty::openpty(None, None)?;
         let second_tty = nix::pty::openpty(None, None)?;
         let attach = |manager: &Manager, slave: std::os::fd::OwnedFd| -> Result<NativeProcess> {

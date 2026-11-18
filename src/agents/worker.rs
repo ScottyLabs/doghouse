@@ -27,6 +27,11 @@ pub(super) fn reconcile(root: &std::path::Path, run: &mut Run) -> Result<()> {
         return Ok(());
     }
     let record_directory = root.join(&run.id).canonicalize()?;
+    let socket = record_directory.join("terminal.socket");
+    if socket.exists() && matches!(interactive::console_status(&socket), Ok(None)) {
+        run.state = State::Detached;
+        return Ok(());
+    }
     let legacy_root = record_directory
         .parent()
         .map(std::path::Path::to_owned)
@@ -36,11 +41,6 @@ pub(super) fn reconcile(root: &std::path::Path, run: &mut Run) -> Result<()> {
             run.state = State::Unattached;
             return Ok(());
         }
-    }
-    let socket = record_directory.join("terminal.socket");
-    if socket.exists() && matches!(interactive::console_status(&socket), Ok(None)) {
-        run.state = State::Detached;
-        return Ok(());
     }
     run.state = State::Interrupted;
     run.event("Recovery", "Worker is no longer running. Files and saved conversation are retained; choose Resume to continue.");
@@ -65,6 +65,10 @@ pub(super) fn launch(
 ) -> Result<()> {
     let _launch = lease(&manager.root, &format!("launch:{id}"))?;
     ensure!(
+        !manager.root.join(id).join("delete-request").exists(),
+        "This session is being deleted"
+    );
+    ensure!(
         !live(&manager.root, id)?,
         "This session already has a worker"
     );
@@ -74,7 +78,7 @@ pub(super) fn launch(
         reconcile(&manager.root, &mut run)?;
         ensure!(
             run.state != State::Unattached,
-            "This session is still owned by another process"
+            "A native agent still holds this checkout; open its terminal or stop that process before restarting"
         );
         manager.runs.insert(id.into(), run);
         manager.persist(id)?;

@@ -109,13 +109,15 @@ fn contents(ui: &Ui) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
                 ("Up/Down / j/k", "Choose a session"),
                 ("Home / End", "First / last run"),
                 ("Ctrl+D / U", "Scroll preview down / up"),
-                ("Enter", "Open native conversation"),
+                ("Enter / o", "Open conversation"),
+                ("Space", "Choose an action"),
+                ("Right / l", "Inspect subagents"),
                 ("Ctrl+Z", "Return to Shepherd"),
-                ("v", "Activity / result"),
                 ("r", "Automated follow-up"),
-                ("Space", "Session actions"),
+                ("Tab", "Activity / result"),
+                ("Ctrl+R / s / F5", "Refresh sessions"),
                 ("H", "Session list / previous turns"),
-                ("s", "Confirm stop of current work"),
+                ("x", "Confirm stop of session and children"),
                 ("f", "Current project / all sessions"),
             ],
         );
@@ -123,10 +125,10 @@ fn contents(ui: &Ui) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
             &mut right,
             "REVIEW & SHARE",
             &[
-                ("d", "Review changes"),
+                ("v", "Review changes"),
                 ("P", "Review a result comment for GCD"),
-                ("x", "Remove a clean worktree"),
-                ("Delete / D", "Delete finished run history"),
+                ("Space", "Cleanup and other actions"),
+                ("d / Delete", "Delete session (confirms stop)"),
                 ("t", "Return to the original task"),
                 ("O", "Open source on GCD"),
             ],
@@ -135,7 +137,7 @@ fn contents(ui: &Ui) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
             &mut right,
             "RETURN",
             &[
-                ("a / Esc", "Back to tasks"),
+                ("a / Esc / h", "Back to tasks"),
                 ("q", "Quit; sessions keep running"),
                 ("Ctrl+C", "Exit; sessions keep running"),
             ],
@@ -202,7 +204,7 @@ fn contents(ui: &Ui) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
             "AGENTS",
             &[
                 ("A", "Run an agent on selected task"),
-                ("a", "Activity and results"),
+                ("a", "Sessions and subagents"),
             ],
         );
         group(

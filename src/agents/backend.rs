@@ -83,7 +83,7 @@ pub(super) fn interactive_command(run: &Run, executable: &std::ffi::OsStr) -> Re
     }
     Ok(command)
 }
-fn validate_session(session: &str) -> Result<()> {
+pub(super) fn validate_session(session: &str) -> Result<()> {
     ensure!(
         session
             .bytes()
@@ -114,6 +114,9 @@ pub(super) fn consume(run: &mut Run, line: &str, stderr: bool) {
         }
         return;
     };
+    if subagents::observe(run, &value) {
+        return;
+    }
     match run.provider {
         Provider::Codex => match string(&value, "type") {
             "thread.started" => {
