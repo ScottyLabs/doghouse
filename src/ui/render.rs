@@ -600,7 +600,7 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
                 label(
                     if ui.agent_view {
                         format!(
-                            "{} runs / {} active total / {}",
+                            "{} sessions / {} active total / {}",
                             ui.visible_runs(store).len(),
                             ui.active_runs,
                             if ui.run_all {
@@ -651,7 +651,7 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
     if ui.agent_view {
         f.render_widget(
             Paragraph::new(Line::from(vec![
-                label("AGENTS / THIS MACHINE  ", BLUE),
+                label("SESSIONS / THIS MACHINE  ", BLUE),
                 label(format!("{} active  /  ", ui.active_runs), MUTED),
                 label("Codex ", BLUE),
                 label(
@@ -906,7 +906,7 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
             )),
             if ui.agent_view {
                 Line::from(label(
-                    "Enter Talk / v Result / d Diff / s Stop / Delete Run / a Tasks / ? Help",
+                    "Enter Open / Space Actions / r Continue / H History / a Tasks / q Quit (agents continue)",
                     BLUE,
                 ))
             } else {
@@ -1133,7 +1133,7 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
             rect,
         );
     }
-    agents::overlays(ui, f);
+    agents::overlays(ui, f, store);
     if let Some((mode, value)) = &ui.prompt {
         if *mode == '/' {
             return;

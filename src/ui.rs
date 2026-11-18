@@ -97,13 +97,19 @@ pub(crate) struct Ui {
     delete_run: Option<String>,
     handoff: Option<String>,
     take_over: Option<String>,
+    stop_run: Option<String>,
+    recover_run: Option<String>,
+    agent_actions: Option<agents::SessionActions>,
+    run_history: bool,
     error_popup: bool,
 }
 impl Ui {
     fn visible_runs<'a>(&'a self, store: &Store) -> Vec<&'a crate::agents::Run> {
         let repos = self.repos(store);
+        let mut seen = std::collections::BTreeSet::new();
         self.runs
             .iter()
+            .filter(|run| self.run_history || seen.insert(run.conversation_key()))
             .filter(|run| {
                 self.run_all
                     || repos.contains(&run.repository)
@@ -112,6 +118,21 @@ impl Ui {
                     })
             })
             .collect()
+    }
+    fn refresh_runs(&mut self, store: &Store, runs: Vec<crate::agents::Run>) {
+        let selected = self
+            .visible_runs(store)
+            .get(self.run_row)
+            .map(|run| run.conversation_key());
+        self.runs = runs;
+        if let Some(key) = selected
+            && let Some(row) = self
+                .visible_runs(store)
+                .iter()
+                .position(|run| run.conversation_key() == key)
+        {
+            self.run_row = row;
+        }
     }
     fn personal_refresh(&mut self, sender: &Sender<Job>) -> Result<()> {
         ensure!(!self.offline, "Offline mode uses cached My work");
@@ -657,7 +678,7 @@ fn run_ui(
         ..Ui::default()
     };
     let (sender, receiver) = mpsc::channel::<Job>();
-    let mut manager = crate::agents::Manager::open(&store.dir)?;
+    let mut manager = crate::agents::Manager::shared(&store.dir)?;
     if ui.local_scope() {
         ui.message = "Local directory projects / + add directory / n task / A agent".into();
     } else if offline {
@@ -703,7 +724,7 @@ fn run_ui(
             ui.message = match result {
                 Ok(()) => {
                     if manager.is_detached(&id) {
-                        "Working in background / Enter returns / s stops / v last automated result"
+                        "Conversation is open / Enter returns / Space actions / q leaves agents running"
                             .into()
                     } else {
                         "Returned from the native conversation / Enter opens it again / v last automated result".into()
@@ -712,7 +733,7 @@ fn run_ui(
                 Err(error) => format!("{error:#}"),
             };
         }
-        ui.runs = manager.snapshots();
+        ui.refresh_runs(store, manager.snapshots());
         if ui
             .delete_run
             .as_ref()
@@ -1032,6 +1053,29 @@ mod tests {
     use super::*;
     use crossterm::event::KeyEvent;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn sessions_group_followups_and_keep_selection_when_another_window_starts_work() -> Result<()> {
+        let (_directory, store) = fixture()?;
+        let old = crate::agents::Run::fixture(crate::agents::Provider::Codex);
+        let mut followup = old.clone();
+        followup.id = "followup".into();
+        followup.conversation = Some(old.conversation_key());
+        let mut ui = Ui {
+            run_all: true,
+            runs: vec![followup.clone(), old.clone()],
+            ..Ui::default()
+        };
+        assert_eq!(ui.visible_runs(&store).len(), 1);
+        let mut unrelated = old.clone();
+        unrelated.id = "another-session".into();
+        ui.refresh_runs(&store, vec![unrelated, followup, old]);
+        assert_eq!(ui.run_row, 1);
+        assert_eq!(ui.visible_runs(&store)[ui.run_row].id, "followup");
+        ui.run_history = true;
+        assert_eq!(ui.visible_runs(&store).len(), 3);
+        Ok(())
+    }
 
     #[test]
     fn action_menu_opens_pr_editors_and_priority_picker_without_writes() -> Result<()> {

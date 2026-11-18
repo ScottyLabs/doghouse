@@ -10,6 +10,7 @@ fn state_color(state: State) -> Color {
         State::Stopping | State::Attention => AMBER,
         State::Failed => Color::Red,
         State::Stopped | State::Unattached => MUTED,
+        State::Interrupted => AMBER,
     }
 }
 fn selected_run<'a>(ui: &'a Ui, store: &Store) -> Option<&'a Run> {
@@ -112,9 +113,19 @@ fn lines_for(run: &Run, output: bool, width: u16) -> Vec<Line<'static>> {
     }
     if run.state == State::Unattached {
         lines.push(Line::from(label(
-            "Owned by another window or interrupted. Inspect the native session.",
+            "A process is still using this checkout. Stop its current turn before opening the conversation.",
             AMBER,
         )))
+    }
+    if run.state == State::Interrupted {
+        lines.push(Line::from(label(
+            if run.session_id.is_some() {
+                "Enter recovers the saved conversation / r continues with a new goal"
+            } else {
+                "No native conversation ID was saved. Files are retained; A starts a new session."
+            },
+            AMBER,
+        )));
     }
     if let Some(error) = &run.failure {
         section(&mut lines, "ATTENTION");
@@ -168,7 +179,7 @@ pub(super) fn view(ui: &Ui, f: &mut ratatui::Frame, store: &Store, area: Rect) {
     }
     let runs = ui.visible_runs(store);
     if runs.is_empty() {
-        f.render_widget(Paragraph::new("No agent runs in this project yet.\n\nA  Start an agent for the selected task\na  Return to tasks\n\nChoose Codex or Claude Code, review the checkout and goal, then launch.\nPlanning runs inspect the checkout. Implementation runs use an isolated Git worktree.\n\nRuns execute on this machine using the selected CLI's existing login.\nResults are published to GCD only after you review and confirm them.").wrap(Wrap{trim:false}).style(style(MUTED)).block(block("Agents / this machine",true).padding(Padding::new(2,1,1,0))),area);
+        f.render_widget(Paragraph::new("No agent sessions yet.\n\nA  Start an agent for the selected task\na  Return to tasks\n\nChoose Codex or Claude Code, review the checkout and goal, then launch.\nPlanning runs inspect the checkout. Implementation runs use an isolated Git worktree.\n\nRuns execute on this machine using the selected CLI's existing login.\nResults are published to GCD only after you review and confirm them.").wrap(Wrap{trim:false}).style(style(MUTED)).block(block("Sessions / this machine",true).padding(Padding::new(2,1,1,0))),area);
         return;
     }
     let panes = if area.width >= 90 {
@@ -222,9 +233,17 @@ pub(super) fn view(ui: &Ui, f: &mut ratatui::Frame, store: &Store, area: Rect) {
         .collect::<Vec<_>>();
     let mut state = ListState::default().with_selected(Some(ui.run_row));
     f.render_stateful_widget(
-        List::new(items)
-            .highlight_symbol("> ")
-            .block(block(format!("{} runs", runs.len()), true).padding(Padding::horizontal(1))),
+        List::new(items).highlight_symbol("> ").block(
+            block(
+                format!(
+                    "{} {}",
+                    runs.len(),
+                    if ui.run_history { "turns" } else { "sessions" }
+                ),
+                true,
+            )
+            .padding(Padding::horizontal(1)),
+        ),
         panes[0],
         &mut state,
     );
@@ -242,7 +261,7 @@ pub(super) fn view(ui: &Ui, f: &mut ratatui::Frame, store: &Store, area: Rect) {
                     if ui.run_output {
                         "Result / v activity / Enter conversation"
                     } else {
-                        "Run / Enter conversation / v result"
+                        "Session / Enter opens / Space actions"
                     },
                     false,
                 )
@@ -252,7 +271,67 @@ pub(super) fn view(ui: &Ui, f: &mut ratatui::Frame, store: &Store, area: Rect) {
         );
     }
 }
-pub(super) fn overlays(ui: &Ui, f: &mut ratatui::Frame) {
+pub(super) fn overlays(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
+    if let Some(menu) = &ui.agent_actions {
+        let row = menu.row;
+        let rect = popup(f.area(), 70, 14);
+        f.render_widget(Clear, rect);
+        let mut lines = vec![
+            Line::raw("Up/Down or j/k choose / Enter open / Esc back"),
+            Line::raw(""),
+        ];
+        for (index, (name, _)) in crate::ui::agents::session_actions(ui, store)
+            .iter()
+            .enumerate()
+        {
+            lines.push(Line::styled(
+                format!("{} {name}", if index == row { ">" } else { " " }),
+                if index == row {
+                    style(BLUE).add_modifier(Modifier::BOLD)
+                } else {
+                    style(TEXT)
+                },
+            ));
+        }
+        f.render_widget(
+            Paragraph::new(lines)
+                .block(block("Session actions", true).padding(Padding::horizontal(1))),
+            rect,
+        );
+    }
+    for (id, title, description) in [
+        (
+            &ui.stop_run,
+            "Stop this agent?",
+            "This stops its current work and child tools. Conversation history and checkout changes are retained. Quitting Shepherd instead keeps the session running.",
+        ),
+        (
+            &ui.recover_run,
+            "Recover interrupted conversation?",
+            "Its worker is no longer running. Open the saved native conversation in the existing checkout. No automated turn is restarted by Shepherd; unsaved terminal input may be unavailable.",
+        ),
+    ] {
+        if let Some(id) = id {
+            let rect = popup(f.area(), 76, 12);
+            f.render_widget(Clear, rect);
+            let title_text = ui
+                .runs
+                .iter()
+                .find(|run| run.id == *id)
+                .map(|run| run.task_title.as_str())
+                .unwrap_or("Session");
+            f.render_widget(
+                Paragraph::new(format!(
+                    "{}\n\n{description}\n\nEnter confirms / Esc cancels",
+                    clean(title_text)
+                ))
+                .wrap(Wrap { trim: false })
+                .block(block(title, true).padding(Padding::horizontal(1))),
+                rect,
+            );
+        }
+    }
+
     let area = f.area();
     if let Some(form) = &ui.launch {
         let rect = popup(area, 94, 25);
@@ -424,9 +503,13 @@ pub(super) fn overlays(ui: &Ui, f: &mut ratatui::Frame) {
                     style(TEXT).add_modifier(Modifier::BOLD),
                 ),
                 Line::raw(""),
-                Line::raw("Stop the background turn and take over this conversation?"),
+                Line::raw(if run.state == State::Unattached {
+                    "Stop the old process and open its saved conversation in a persistent worker?"
+                } else {
+                    "Stop the current automated turn and open its saved conversation?"
+                }),
                 Line::from(label(
-                    "Progress and files are retained. Ctrl+Z returns while work continues.",
+                    "Saved history and files are retained. Unsent terminal input may be lost.",
                     MUTED,
                 )),
                 Line::raw(""),

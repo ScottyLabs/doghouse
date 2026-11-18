@@ -478,10 +478,6 @@ pub(super) fn key(
                 !ui.writing,
                 "Saving on GCD. Wait for confirmation before quitting."
             );
-            ensure!(
-                ui.active_runs == 0,
-                "Agents are still running. Open a, then stop or finish them before quitting."
-            );
             return Ok(true);
         }
         KeyCode::Esc => {

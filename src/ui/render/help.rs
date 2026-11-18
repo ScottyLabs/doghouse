@@ -106,15 +106,17 @@ fn contents(ui: &Ui) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
             &mut left,
             "MANAGE",
             &[
-                ("Up/Down / j/k", "Choose a run"),
+                ("Up/Down / j/k", "Choose a session"),
                 ("Home / End", "First / last run"),
                 ("Ctrl+D / U", "Scroll preview down / up"),
                 ("Enter", "Open native conversation"),
                 ("Ctrl+Z", "Return to Shepherd"),
                 ("v", "Activity / result"),
                 ("r", "Automated follow-up"),
-                ("s", "Stop the selected agent"),
-                ("f", "Current project / all runs"),
+                ("Space", "Session actions"),
+                ("H", "Session list / previous turns"),
+                ("s", "Confirm stop of current work"),
+                ("f", "Current project / all sessions"),
             ],
         );
         group(
@@ -134,8 +136,8 @@ fn contents(ui: &Ui) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
             "RETURN",
             &[
                 ("a / Esc", "Back to tasks"),
-                ("q", "Quit after runs finish"),
-                ("Ctrl+C", "Stop owned runs and exit"),
+                ("q", "Quit; sessions keep running"),
+                ("Ctrl+C", "Exit; sessions keep running"),
             ],
         );
     } else {

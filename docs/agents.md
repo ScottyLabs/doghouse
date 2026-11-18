@@ -16,8 +16,10 @@ Shepherd invokes the installed native CLI with its existing login and model conf
 | Agents key | Action |
 | -- | -- |
 | A / n | New run for the selected task |
-| r | Resume the native session with a follow-up goal |
-| s | Stop the selected agent and its child tools, including in another window |
+| r | Continue the conversation with a follow-up goal |
+| Space | Open session actions |
+| H | Show or hide previous turns |
+| s | Confirm stopping current work; files and conversation are retained |
 | Enter | Open or resume the native Codex/Claude conversation |
 | Ctrl+Z (inside CLI) | Return to Shepherd, keeping the same native process |
 | Home / End | First / last run (Home also resets preview scrolling) |
@@ -30,19 +32,27 @@ Shepherd invokes the installed native CLI with its existing login and model conf
 | t / O | Return to the task / open its GCD issue |
 | a / Esc | Return to tasks |
 
-Enter takes you into the real native CLI in the same terminal. Ctrl+Z detaches from the CLI and returns to Shepherd while the agent keeps working. Enter reattaches to the same process, including its in-memory draft. A tmux terminal in the private user cache preserves the screen and runs independently of the visible conversation; packaged Shepherd includes tmux. Exiting the CLI also returns to Shepherd. Other background agents continue being polled. Opening a still-running automated turn first asks to stop that turn and take over its session. Every Shepherd instance using the same user cache can attach to that terminal, including simultaneously, without restarting the CLI. Background takeover and `s` send a local stop request to the owning window, which signals only that agent's process group. The owning window retains checkout and task locks; closing it still stops its agents. Separate `--data-dir` caches and other machines do not share terminals.
+Enter opens the native CLI in the same terminal. Ctrl+Z returns to Shepherd while that terminal stays open. Enter reattaches, including its in-memory draft. A private tmux terminal preserves the screen; packaged Shepherd includes tmux. Opening an automated turn that is still working asks for confirmation before stopping that turn and opening its conversation.
+
+Every Shepherd window is a client of the same private, per-user session registry, including windows with different `--data-dir` boards. Workers own the agent processes, logs, task locks, and checkout locks. Closing or killing a Shepherd window leaves workers and native conversations running. Any window can open, continue, or explicitly stop a session. Registry records live under `$XDG_STATE_HOME/shepherd/agents`, or `~/.local/state/shepherd/agents`. `SHEPHERD_AGENT_DIR` explicitly selects a separate registry base for testing or administration. Different users and machines remain separate.
+
+Existing sessions are registered from the current board's old `agents/` directory and the previous default user cache. Registration preserves original record, checkout, and native-history paths. A run still owned by an older Shepherd window remains owned there until transferred: Enter asks to stop the old process and reopen its saved conversation in a persistent worker. Registration alone cannot reparent an existing process. With an explicit `SHEPHERD_AGENT_DIR`, only the selected board's legacy sessions are registered; unrelated user caches are not imported.
+
+The list shows the newest turn of each conversation. `H` expands previous turns. Space opens contextual actions; Enter opens a conversation, `r` supplies a follow-up goal, and `s` asks before stopping current work. Working, Conversation open, Finished, Needs attention, and Interrupted describe distinct states. Selection stays on the same conversation when another window starts work.
+
+After a reboot or worker interruption, Shepherd checks live ownership locks and the actual terminal rather than trusting a stale socket file or PID. An interrupted session offers Enter to confirm recovery of its saved native conversation in the existing checkout. No automated goal or uncertain write is replayed automatically. Files and saved session history survive, but in-memory terminal input cannot survive a reboot. If no native session ID was saved before interruption, the checkout remains available and a new session is needed. An orphaned agent that still holds its checkout lock blocks recovery until it exits; this avoids duplicate agents after a worker crash.
 
 After an interactive conversation, the saved automated result is labeled as historical and cannot be published as a fresh result. An automated follow-up with `r` can produce a new publishable result. Native session history remains available through Enter.
 
 Delete removes only Shepherd's run record and transcript. It requires confirmation, blocks active/detached runs and pending publication, and retains project files, worktrees, native session history, and GCD comments. `x` separately removes a clean worktree.
 
-Up to four runs can execute in one window. Local ownership locks prevent another Shepherd window from using the same task or checkout concurrently. Resume retains the original checkout and native session. A changed HEAD must be preserved before starting a new run. Cleanup refuses dirty worktrees or worktrees containing new commits. Stopping a run keeps its changes and result.
+Up to four automated turns can execute across the shared registry. Local ownership locks prevent another Shepherd window from using the same task or checkout concurrently. Resume retains the original checkout and native session. A changed HEAD must be preserved before starting a new run. Cleanup refuses dirty worktrees or worktrees containing new commits. Stopping a run keeps its changes and result.
 
-Runs, logs, native session IDs, and checkouts live under the user cache's private `agents/` directory. Activity and result previews are bounded; the raw transcript is capped at 8 MiB per run. Token usage is shown only when the CLI reports it. Claude's reported cost is a cumulative CLI estimate for the session, not a billing total.
+New runs, logs, native session IDs, and checkouts live under the shared registry's private `agents/` directory. Legacy worktree paths remain in place. Activity and result previews are bounded; the raw transcript is capped at 8 MiB per run. Token usage is shown only when the CLI reports it. Claude's reported cost is a cumulative CLI estimate for the session, not a billing total.
 
 Agents run on **this machine**. They are not a distributed job service. Governance and GCD provide the shared hierarchy and issues; explicitly published result comments are visible elsewhere and loaded in expanded task detail. Local run state does not assign or move shared issues. Publication is never automatically retried, including after an uncertain response. Inspect GCD before another attempt.
 
-Ordinary quit waits for active runs; stop them first. Ctrl+C or a handled terminal-close signal stops owned process groups and records them as stopped. Abrupt crashes, SIGKILL, or tools that escape the process group can leave an unattached native session; inspect it in the native CLI before continuing. Repository instructions and each backend's permissions still apply.
+`q`, Ctrl+C, and terminal closure leave sessions running. Use `s` and confirm to stop current work explicitly; stopping retains files and saved conversation history. A worker receiving a handled shutdown signal stops its own process group and records an interruption. Reopening Shepherd after startup offers recovery rather than silently restarting work. Repository instructions and native backend permissions remain in effect.
 
 Integration references: [Codex noninteractive mode](https://learn.chatgpt.com/docs/non-interactive-mode), [Codex commands](https://learn.chatgpt.com/docs/developer-commands), [Claude Code programmatic use](https://code.claude.com/docs/en/headless), and [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference).
 

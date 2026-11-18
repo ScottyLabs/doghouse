@@ -50,6 +50,16 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Action {
+    #[command(hide = true)]
+    AgentWorker {
+        id: String,
+        #[arg(long)]
+        terminal: bool,
+        #[arg(long, default_value_t = 100)]
+        width: u16,
+        #[arg(long, default_value_t = 30)]
+        height: u16,
+    },
     /// Refresh your assignments, PRs, reviews, and account repositories through Collar.
     Inbox,
     /// Manage directory projects stored only on this machine.
@@ -672,8 +682,18 @@ fn main() -> Result<()> {
         Some(path) => path,
         None => cache_directory()?,
     };
+    if let Some(Action::AgentWorker {
+        id,
+        terminal,
+        width,
+        height,
+    }) = &cli.command
+    {
+        return agents::worker::run(&data_dir, id, *terminal, *width, *height);
+    }
     let mut store = Store::open(data_dir)?;
     match cli.command {
+        Some(Action::AgentWorker { .. }) => bail!("Worker was already dispatched"),
         None => tui(
             &mut store,
             cli.workspace

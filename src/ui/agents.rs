@@ -2,6 +2,11 @@ use super::*;
 use crate::agents::{Manager, Mode, Provider, Run};
 use crossterm::event::KeyEvent;
 
+pub(super) struct SessionActions {
+    pub id: String,
+    pub state: crate::agents::State,
+    pub row: usize,
+}
 pub(super) struct Launch {
     pub task: Value,
     pub provider: Provider,
@@ -107,6 +112,33 @@ fn selected_run(ui: &Ui, store: &Store) -> Result<Run> {
         .cloned()
         .context("Select an agent run first")
 }
+pub(super) fn session_actions(ui: &Ui, store: &Store) -> Vec<(&'static str, KeyCode)> {
+    let Some(run) = ui.visible_runs(store).get(ui.run_row).copied() else {
+        return Vec::new();
+    };
+    [
+        ("Open conversation / Enter", KeyCode::Enter),
+        ("Continue with a follow-up / r", KeyCode::Char('r')),
+        ("Stop current work / s", KeyCode::Char('s')),
+        ("Activity or last result / v", KeyCode::Char('v')),
+        ("Review changes / d", KeyCode::Char('d')),
+        ("Show or hide previous turns / H", KeyCode::Char('H')),
+        ("Return to task / t", KeyCode::Char('t')),
+    ]
+    .into_iter()
+    .filter(|(_, code)| match code {
+        KeyCode::Char('s') => run.state.active() || run.state == crate::agents::State::Unattached,
+        KeyCode::Char('r') => {
+            !run.state.active()
+                && run.state != crate::agents::State::Unattached
+                && run.session_id.is_some()
+        }
+        KeyCode::Char('d') => run.mode == Mode::Implement,
+        KeyCode::Enter => run.session_id.is_some(),
+        _ => true,
+    })
+    .collect()
+}
 pub(super) fn key(
     ui: &mut Ui,
     store: &mut Store,
@@ -114,6 +146,60 @@ pub(super) fn key(
     sender: &Sender<Job>,
     manager: &mut Manager,
 ) -> Result<bool> {
+    if let Some(id) = ui.stop_run.clone() {
+        match key.code {
+            KeyCode::Esc => ui.stop_run = None,
+            KeyCode::Enter => {
+                manager.stop(&id)?;
+                ui.stop_run = None;
+                ui.message =
+                    "Stop requested. Conversation, checkout, and history are retained.".into();
+            }
+            _ => {}
+        }
+        return Ok(true);
+    }
+    if let Some(id) = ui.recover_run.clone() {
+        match key.code {
+            KeyCode::Esc => ui.recover_run = None,
+            KeyCode::Enter => {
+                ui.recover_run = None;
+                ui.handoff = Some(id);
+            }
+            _ => {}
+        }
+        return Ok(true);
+    }
+    if let Some(mut menu) = ui.agent_actions.take() {
+        let selected = selected_run(ui, store)?;
+        ensure!(
+            selected.id == menu.id && selected.state == menu.state,
+            "Session changed; reopen its actions"
+        );
+        let mut row = menu.row;
+        let actions = session_actions(ui, store);
+        match key.code {
+            KeyCode::Esc => return Ok(true),
+            KeyCode::Up | KeyCode::Char('k') => row = row.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => {
+                row = (row + 1).min(actions.len().saturating_sub(1))
+            }
+            KeyCode::Enter => {
+                let (_, code) = actions.get(row).context("Select an action")?;
+                return self::key(
+                    ui,
+                    store,
+                    KeyEvent::new(*code, KeyModifiers::NONE),
+                    sender,
+                    manager,
+                );
+            }
+            _ => {}
+        }
+        menu.row = row;
+        ui.agent_actions = Some(menu);
+        return Ok(true);
+    }
     if let Some(id) = ui.take_over.clone() {
         match key.code {
             KeyCode::Esc => ui.take_over = None,
@@ -311,8 +397,16 @@ pub(super) fn key(
                     store.data["agentDefaults"]["provider"] = serde_json::to_value(form.provider)?;
                     store.save()?;
                     ui.agent_view = true;
-                    ui.run_row = 0;
-                    ui.message = format!("{} run started: {id}", form.provider.name());
+                    ui.runs = manager.snapshots();
+                    ui.run_row = ui
+                        .visible_runs(store)
+                        .iter()
+                        .position(|run| run.id == id)
+                        .unwrap_or(0);
+                    ui.message = format!(
+                        "{} session is working. Enter opens its conversation; q leaves it running.",
+                        form.provider.name()
+                    );
                     ui.error = false;
                 }
                 Err(error) => {
@@ -401,8 +495,24 @@ pub(super) fn key(
         }
         KeyCode::Char('s') => {
             let run = selected_run(ui, store)?;
-            manager.stop(&run.id)?;
-            ui.message = "Requested stop for the selected agent and its tools".into();
+            ensure!(
+                run.state.active() || run.state == crate::agents::State::Unattached,
+                "This session is not working. Enter opens its saved conversation."
+            );
+            ui.stop_run = Some(run.id);
+        }
+        KeyCode::Char(' ') => {
+            let selected = selected_run(ui, store)?;
+            ui.agent_actions = Some(SessionActions {
+                id: selected.id,
+                state: selected.state,
+                row: 0,
+            });
+        }
+        KeyCode::Char('H') => {
+            ui.run_history = !ui.run_history;
+            ui.run_row = 0;
+            ui.run_scroll = 0;
         }
         KeyCode::Char('f') => {
             ui.run_all = !ui.run_all;
@@ -490,8 +600,10 @@ pub(super) fn key(
                 run.session_id.is_some(),
                 "This run has no native session. Press A to start a new agent"
             );
-            if (run.state.active() || run.state == crate::agents::State::Unattached)
-                && !manager.is_detached(&run.id)
+            if run.state == crate::agents::State::Interrupted {
+                ui.recover_run = Some(run.id);
+            } else if run.state == crate::agents::State::Unattached
+                || (run.state.active() && !manager.is_detached(&run.id))
             {
                 ui.take_over = Some(run.id);
             } else {

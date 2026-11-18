@@ -18,6 +18,7 @@ use std::{
 };
 mod backend;
 mod interactive;
+pub(crate) mod worker;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -81,20 +82,22 @@ pub(crate) enum State {
     Stopped,
     Attention,
     Unattached,
+    Interrupted,
 }
 impl State {
     pub fn name(self) -> &'static str {
         match self {
-            Self::Running => "Running",
+            Self::Running => "Working",
             Self::Stopping => "Stopping",
-            Self::Completed => "Ready to review",
-            Self::Continued => "Continued in CLI",
+            Self::Completed => "Finished",
+            Self::Continued => "Ready to continue",
             Self::Suspended => "Conversation paused (older session)",
-            Self::Detached => "Working in background",
+            Self::Detached => "Conversation open",
             Self::Failed => "Failed",
             Self::Stopped => "Stopped",
             Self::Attention => "Needs attention",
-            Self::Unattached => "Running in another window",
+            Self::Unattached => "Working in another process",
+            Self::Interrupted => "Interrupted",
         }
     }
     pub fn active(self) -> bool {
@@ -142,8 +145,18 @@ pub(crate) struct Run {
     pub publication: String,
     #[serde(default)]
     pub native_continued: bool,
+    #[serde(default)]
+    pub conversation: Option<String>,
 }
 impl Run {
+    pub fn conversation_key(&self) -> String {
+        self.conversation.clone().unwrap_or_else(|| {
+            self.session_id
+                .as_ref()
+                .map(|session| format!("{:?}:{session}", self.provider))
+                .unwrap_or_else(|| self.id.clone())
+        })
+    }
     fn event(&mut self, kind: &str, message: &str) {
         self.updated_at = now();
         self.events.push(RunEvent {
@@ -187,6 +200,7 @@ impl Run {
             log_truncated: false,
             publication: "not-published".into(),
             native_continued: false,
+            conversation: None,
         }
     }
 }
@@ -257,6 +271,7 @@ pub(crate) struct Manager {
     interactive: Option<String>,
     consoles: BTreeMap<String, interactive::Console>,
     terminal_reset: bool,
+    detached: bool,
 }
 fn find_executable(name: &OsStr) -> Option<PathBuf> {
     let path = PathBuf::from(name);
@@ -408,7 +423,7 @@ impl Manager {
             .filter(|path| path.join("run.json").is_file())
             .collect::<Vec<_>>();
         paths.sort();
-        for path in paths.into_iter().rev().take(200) {
+        for path in paths.into_iter().rev() {
             let file = path.join("run.json");
             if !file.is_file() {
                 continue;
@@ -423,13 +438,7 @@ impl Manager {
                 valid_id(&run.id) && path.file_name() == Some(OsStr::new(&run.id)),
                 "Invalid agent record identity"
             );
-            if run.state.active() && !path.join("terminal.socket").exists() {
-                run.state = State::Unattached;
-                run.event(
-                    "Controller",
-                    "This run is not attached to this Shepherd window",
-                );
-            }
+            worker::reconcile(&root, &mut run)?;
             if run.publication == "publishing" {
                 run.publication = "unknown".into();
             }
@@ -446,6 +455,7 @@ impl Manager {
             interactive: None,
             consoles: BTreeMap::new(),
             terminal_reset: false,
+            detached: true,
         })
     }
     pub fn snapshots(&self) -> Vec<Run> {
@@ -454,7 +464,29 @@ impl Manager {
         runs
     }
     pub fn active_count(&self) -> usize {
-        self.active.len() + self.consoles.len()
+        if self.detached {
+            self.runs
+                .values()
+                .filter(|run| run.state.active() || run.state == State::Unattached)
+                .count()
+        } else {
+            self.active.len() + self.consoles.len()
+        }
+    }
+    fn automated_count(&self) -> usize {
+        if self.detached {
+            self.runs
+                .values()
+                .filter(|run| {
+                    matches!(
+                        run.state,
+                        State::Running | State::Stopping | State::Unattached
+                    )
+                })
+                .count()
+        } else {
+            self.active.len()
+        }
     }
     pub fn get(&self, id: &str) -> Result<&Run> {
         self.runs.get(id).context("Agent run not found")
@@ -486,8 +518,9 @@ impl Manager {
         path: PathBuf,
         goal: String,
     ) -> Result<String> {
+        self.refresh_external()?;
         ensure!(
-            self.active.len() < 4,
+            self.automated_count() < 4,
             "Four agents are already running. Stop or finish one first."
         );
         ensure!(
@@ -500,10 +533,10 @@ impl Manager {
             provider.name()
         );
         ensure!(
-            !self
-                .runs
-                .values()
-                .any(|r| self.active.contains_key(&r.id) && r.task_id == string(task, "id")),
+            !self.runs.values().any(|r| (self.active.contains_key(&r.id)
+                || r.state.active()
+                || r.state == State::Unattached)
+                && r.task_id == string(task, "id")),
             "This task already has an active agent run"
         );
         let repository = string(task, "repo");
@@ -520,6 +553,15 @@ impl Manager {
             );
         }
         let (source_directory, base_commit) = run_checkout(&path, repository, mode)?;
+        ensure!(
+            mode != Mode::Plan
+                || !self
+                    .runs
+                    .values()
+                    .any(|run| (run.state.active() || run.state == State::Unattached)
+                        && run.directory == source_directory),
+            "A session is still using this checkout; open or stop it first"
+        );
         let context = task_context(task);
         let instructions = project_instructions(&source_directory)?;
         let setup = instructions
@@ -578,6 +620,7 @@ impl Manager {
             log_truncated: false,
             publication: "not-published".into(),
             native_continued: false,
+            conversation: Some(id.clone()),
         };
         let mut run = run;
         run.event("Setup", &if instructions.is_empty() { "No AGENTS.md in the project or its parents; agent will inspect project documentation".into() } else { format!("Loaded project instructions: {}",instructions.iter().map(|(path,_)|path.display().to_string()).collect::<Vec<_>>().join(", ")) });
@@ -608,18 +651,25 @@ impl Manager {
             }
         }
         if let Err(error) = self.spawn(&id, &prompt) {
-            self.failed_start(&id, &error)?;
+            if !worker::live(&self.root, &id)? {
+                self.failed_start(&id, &error)?;
+            }
             return Err(error);
         }
         Ok(id)
     }
     pub fn resume(&mut self, id: &str, goal: String) -> Result<String> {
-        ensure!(self.active.len() < 4, "Four agents are already running");
+        self.refresh_external()?;
+        ensure!(
+            self.automated_count() < 4,
+            "Four agents are already running"
+        );
         ensure!(
             !goal.trim().is_empty() && goal.len() <= 6000,
             "Enter a follow-up goal"
         );
-        let previous = self.read_record(id)?;
+        let mut previous = self.read_record(id)?;
+        worker::reconcile(&self.root, &mut previous)?;
         ensure!(
             !previous.state.active(),
             "The previous run is still active in another window"
@@ -631,7 +681,9 @@ impl Manager {
             "The checkout HEAD changed. Preserve its commits and start a new run"
         );
         ensure!(
-            !self.runs.values().any(|r| self.active.contains_key(&r.id)
+            !self.runs.values().any(|r| (self.active.contains_key(&r.id)
+                || r.state.active()
+                || r.state == State::Unattached)
                 && (r.session_id == previous.session_id || r.directory == previous.directory)),
             "That session or checkout already has an active run"
         );
@@ -649,7 +701,9 @@ impl Manager {
         );
         run_checkout(&previous.directory, &previous.repository, previous.mode)?;
         let id = identifier();
+        let conversation = previous.conversation_key();
         let mut run = previous;
+        run.conversation = Some(conversation);
         run.id = id.clone();
         run.goal = goal.clone();
         run.created_at = now();
@@ -671,7 +725,9 @@ impl Manager {
         self.persist(&id)?;
         let result=self.spawn(&id,&format!("Continue the existing task in this checkout. Do not push, publish, merge, change Governance, close issues, or expose credentials. Return evidence for human review.\n\nUSER FOLLOW-UP:\n{goal}"));
         if let Err(error) = result {
-            self.failed_start(&id, &error)?;
+            if !worker::live(&self.root, &id)? {
+                self.failed_start(&id, &error)?;
+            }
             return Err(error);
         }
         Ok(id)
@@ -682,15 +738,38 @@ impl Manager {
         run.failure = Some(format!("{error:#}"));
         self.persist(id)
     }
-    fn spawn(&mut self, id: &str, prompt: &str) -> Result<()> {
-        let run = self.get(id)?;
-        let leases = vec![
-            lease(&self.root, &format!("checkout:{}", run.directory.display()))?,
-            lease(
-                &self.root,
+    fn execution_leases(&self, run: &Run) -> Result<Vec<Lease>> {
+        let mut roots = std::collections::BTreeSet::from([self.root.clone()]);
+        for record in self.runs.values().filter(|record| {
+            record.id == run.id || (record.owns_worktree && record.directory == run.directory)
+        }) {
+            let directory = self.root.join(&record.id).canonicalize()?;
+            roots.insert(
+                directory
+                    .parent()
+                    .context("Missing session registry")?
+                    .to_path_buf(),
+            );
+        }
+        let mut leases = Vec::new();
+        for root in roots {
+            leases.push(lease(
+                &root,
+                &format!("checkout:{}", run.directory.display()),
+            )?);
+            leases.push(lease(
+                &root,
                 &format!("task:{}:{}", run.repository, run.task_id),
-            )?,
-        ];
+            )?);
+        }
+        Ok(leases)
+    }
+    fn spawn(&mut self, id: &str, prompt: &str) -> Result<()> {
+        if self.detached {
+            return worker::launch(self, id, Some(prompt), 100, 30);
+        }
+        let run = self.get(id)?;
+        let leases = self.execution_leases(run)?;
         run_checkout(&run.directory, &run.repository, run.mode)?;
         let mut command = backend::command(run, &self.executables[run.provider.index()])?;
         command
@@ -698,6 +777,29 @@ impl Manager {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
+        let descriptors = leases
+            .iter()
+            .map(|lease| std::os::fd::AsRawFd::as_raw_fd(&lease.0))
+            .collect::<Vec<_>>();
+        // SAFETY: only async-signal-safe fcntl calls run in this post-fork callback.
+        // The native process retains its task/checkout locks if its worker crashes.
+        unsafe {
+            command.pre_exec(move || {
+                for descriptor in &descriptors {
+                    let flags = nix::libc::fcntl(*descriptor, nix::libc::F_GETFD);
+                    if flags < 0
+                        || nix::libc::fcntl(
+                            *descriptor,
+                            nix::libc::F_SETFD,
+                            flags & !nix::libc::FD_CLOEXEC,
+                        ) < 0
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
         let file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -789,7 +891,6 @@ impl Manager {
             .into_iter()
             .rev()
             .filter(|path| path.join("run.json").is_file())
-            .take(200)
         {
             let Some(id) = path.file_name().and_then(OsStr::to_str) else {
                 continue;
@@ -805,9 +906,7 @@ impl Manager {
                 Err(_) if !path.join("run.json").exists() => continue,
                 Err(error) => return Err(error),
             };
-            if run.state.active() && !path.join("terminal.socket").exists() {
-                run.state = State::Unattached;
-            }
+            worker::reconcile(&self.root, &mut run)?;
             if run.publication == "publishing" {
                 run.publication = "unknown".into();
             }
@@ -939,8 +1038,26 @@ impl Manager {
     }
     pub fn stop(&mut self, id: &str) -> Result<()> {
         if !self.active.contains_key(id) && !self.consoles.contains_key(id) {
-            let run = self.read_record(id)?;
-            ensure!(run.state.active(), "This agent is already stopped");
+            let mut run = self.read_record(id)?;
+            worker::reconcile(&self.root, &mut run)?;
+            ensure!(
+                run.state.active() || run.state == State::Unattached,
+                "This session is no longer working; open its saved conversation instead"
+            );
+            if self.detached
+                && run.state != State::Unattached
+                && self.console_available(id)
+                && !worker::live(&self.root, id)?
+            {
+                worker::launch(self, id, None, 100, 30)?;
+            }
+            ensure!(
+                run.state != State::Unattached
+                    || !self.root.join(id).join("worker.json").is_file()
+                    || worker::live(&self.root, id)?
+                    || self.console_available(id),
+                "The worker is unavailable, but a native process still holds this checkout. Inspect that process before continuing."
+            );
             let mut request = tempfile::NamedTempFile::new_in(self.root.join(id))?;
             request.write_all(b"stop\n")?;
             request.persist(self.root.join(id).join("stop-request"))?;
@@ -991,6 +1108,17 @@ impl Manager {
         ))
     }
     pub fn cleanup(&mut self, id: &str) -> Result<()> {
+        let requested = self.read_record(id)?;
+        let owner = if requested.owns_worktree {
+            id.to_owned()
+        } else {
+            self.runs
+                .values()
+                .find(|run| run.owns_worktree && run.directory == requested.directory)
+                .map(|run| run.id.clone())
+                .context("This session does not own an isolated checkout")?
+        };
+        let id = owner.as_str();
         let run = self.read_record(id)?;
         let _lease = lease(&self.root, &format!("checkout:{}", run.directory.display()))?;
         let run = self.read_record(id)?;
@@ -1009,7 +1137,9 @@ impl Manager {
             "An agent is using this checkout"
         );
         ensure!(
-            run.directory.starts_with(&self.root),
+            run.directory
+                .canonicalize()?
+                .starts_with(self.root.join(id).canonicalize()?),
             "Checkout is not managed by Shepherd"
         );
         git(
@@ -1280,6 +1410,7 @@ mod tests {
         fs::write(&executable, format!("#!/bin/sh\ncat >/dev/null\n{script}"))?;
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700))?;
         let mut manager = Manager::open(&temporary.path().join("cache"))?;
+        manager.detached = false;
         manager.executables = [
             executable.clone().into_os_string(),
             executable.into_os_string(),
@@ -1514,7 +1645,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn closing_controller_stops_and_records_owned_runs() -> Result<()> {
+    fn closing_worker_stops_and_records_owned_runs() -> Result<()> {
         let (temp, mut manager, source) = setup("sleep 30\n")?;
         let id = manager.start(
             &task(),

@@ -82,7 +82,7 @@ The keyboard guide groups navigation, task, Collar, agent, and local actions. It
 
 ## Conversation and preview controls
 
-In Agents, Enter opens the native conversation, Ctrl+Z returns from that CLI to Shepherd while work continues, and Enter reattaches to the same terminal. `v` shows activity or the last automated result, `d` shows the diff, and Delete (or `D`) confirms history deletion. Active and detached runs must be stopped with `s` before deletion.
+In Agents, Enter opens the native conversation, Ctrl+Z returns from that CLI to Shepherd while work continues, and Enter reattaches to the same terminal. `v` shows activity or the last automated result, `d` shows the diff, and Delete (or `D`) confirms history deletion. Active conversations must be stopped with `s` and confirmation before deletion. Space opens session actions; `H` expands previous turns. Quitting Shepherd leaves sessions running. Interrupted sessions offer confirmed recovery.
 
 Task descriptions, discussion comments, and automated results render CommonMark structure: headings, emphasis, inline/fenced code, nested lists, checkboxes, quotes, links, and tables. Hidden HTML comments stay hidden; editing still uses the original Markdown source. Tables fit the preview width, with long cells shortened visibly. Colors follow the terminal palette.
 
@@ -90,10 +90,12 @@ Letter shortcuts ignore Ctrl/Alt modifiers unless explicitly documented; Ctrl+Z 
 
 Pickers use Up/Down or j/k to select, Home/End to jump, and `/` to enter filter text. In filter mode every letter, including j/k, is searchable; arrows and Ctrl+N/P still move the selection. Esc leaves filter mode, then closes the picker. Enter chooses the highlighted item. The footer shows these controls.
 
-Text editors and agent goals also support Ctrl+A/E (start/end), Ctrl+U/K (delete before/after the cursor), and Ctrl+W (delete the previous word). Home/End selects the first/last task or run, and Ctrl+D/U pages down/up; task editing shortcuts stay scoped to the task view. Every Shepherd window using the same cache can open a native conversation with Enter. Ctrl+Z detaches only that terminal client; other attached windows keep their conversation open.
+Text editors and agent goals also support Ctrl+A/E (start/end), Ctrl+U/K (delete before/after the cursor), and Ctrl+W (delete the previous word). Home/End selects the first/last task or run, and Ctrl+D/U pages down/up; task editing shortcuts stay scoped to the task view. Every Shepherd window using the same user registry, including different board caches, can open a native conversation with Enter. Ctrl+Z detaches only that terminal client; other attached windows keep their conversation open.
 
-Reads run with a shared limit of four Collar processes. Refreshes use at most three slots, reserving one for discussion reads and write preconditions. Repositories appear as their complete issue/PR snapshots finish; one failed repository leaves its cached tasks intact while others update. My work searches and detail reads use the same limit, and its tasks and account metadata save together. Manual refresh continues to read the forge rather than a time-based API cache.
+Reads run with a shared limit of four Collar requests. Refreshes use at most three slots, reserving one for discussion reads and write preconditions. Repositories appear as their complete issue/PR snapshots finish; one failed repository leaves its cached tasks intact while others update. My work searches and detail reads use the same limit, and its tasks and account metadata save together. Manual refresh continues to read the forge rather than a time-based API cache.
 
 Board saves buffer JSON before fsync and atomic replacement. The UI checks the board file identity and timestamps between events, reloading it when another window replaces or edits it. The existing board format and explicit reload behavior are preserved.
 
 Forge connections and host-bound credentials are reused between requests. Manual refresh (`s`, `g`, or refreshing My work) reloads Collar credentials, so a separate `collar auth login` takes effect without restarting Shepherd. API responses retain Collar's always-on conditional cache revalidation; writes invalidate that cache. Canonical Governance discovery still uses the pinned Collar CLI to preserve its snapshot validation.
+
+Agent sessions use a shared, private registry in `$XDG_STATE_HOME/shepherd/agents` (default `~/.local/state/shepherd/agents`). Background workers own execution and locks independently of terminal windows. Reopening Shepherd discovers them; after a reboot, it offers recovery from saved conversation history without automatically replaying work. See [agent workflows](agents.md) for lifecycle and recovery details.

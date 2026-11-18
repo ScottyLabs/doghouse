@@ -55,27 +55,33 @@ impl Console {
         command
     }
     fn status(&self) -> Result<Option<i32>> {
-        let output = self
-            .command()
-            .args([
-                "display-message",
-                "-p",
-                "-t",
-                "agent:0.0",
-                "#{pane_dead}:#{pane_dead_status}",
-            ])
-            .output()?;
-        ensure!(
-            output.status.success(),
-            "Native terminal session disappeared"
-        );
-        let text = String::from_utf8_lossy(&output.stdout);
-        if let Some(code) = text.trim().strip_prefix("1:") {
-            return Ok(Some(code.parse().unwrap_or(1)));
-        }
-        Ok(None)
+        console_status(&self.socket)
     }
 }
+pub(super) fn console_status(socket: &std::path::Path) -> Result<Option<i32>> {
+    let output = Command::new("tmux")
+        .arg("-S")
+        .arg(socket)
+        .env_remove("TMUX")
+        .args([
+            "display-message",
+            "-p",
+            "-t",
+            "agent:0.0",
+            "#{pane_dead}:#{pane_dead_status}",
+        ])
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "Native terminal session disappeared"
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    if let Some(code) = text.trim().strip_prefix("1:") {
+        return Ok(Some(code.parse().unwrap_or(1)));
+    }
+    Ok(None)
+}
+
 impl Drop for Console {
     fn drop(&mut self) {
         let _ = self.command().arg("kill-server").output();
@@ -83,11 +89,59 @@ impl Drop for Console {
     }
 }
 impl Manager {
+    pub(super) fn start_console(&mut self, id: &str, width: u16, height: u16) -> Result<()> {
+        let run = self.read_record(id)?;
+        let leases = self.execution_leases(&run)?;
+        let mut run = self.read_record(id)?;
+        ensure!(
+            (!run.state.active() && run.state != State::Unattached) || self.console_available(id),
+            "This session is still working; stop its current turn first"
+        );
+        ensure!(
+            run.publication != "publishing",
+            "Wait for result publication to finish"
+        );
+        ensure!(run.directory.is_dir(), "This checkout no longer exists");
+        let native = backend::interactive_command(&run, &self.executables[run.provider.index()])?;
+        let config = self.root.join(id).join("tmux.conf");
+        write_console_config(&config, b"set -g status off\nset -g prefix None\nset -g history-limit 2000\nset -g remain-on-exit on\nset -g destroy-unattached off\nbind-key -n C-z detach-client\n")?;
+        let console = Console {
+            socket: self.console_socket(id),
+            _leases: leases,
+        };
+        if !self.console_available(id) {
+            if self.console_socket(id).exists() {
+                fs::remove_file(self.console_socket(id))?;
+            }
+            let output = console.command().arg("-f").arg(config)
+                .args(["new-session", "-d", "-s", "agent", "-c"]).arg(&run.directory)
+                .arg("-x").arg(width.to_string()).arg("-y").arg(height.to_string())
+                .arg("--").arg(native.get_program()).args(native.get_args()).output()
+                .context("Open native terminal (tmux is required; use the packaged Shepherd or nix develop)")?;
+            ensure!(
+                output.status.success(),
+                "Open native terminal: {}",
+                clean(&String::from_utf8_lossy(&output.stderr))
+            );
+        }
+        self.consoles.insert(id.into(), console);
+        run.state = State::Detached;
+        run.native_continued = true;
+        run.event("Conversation", "Native conversation available. Enter opens it; Ctrl+Z returns; quitting Shepherd keeps it open.");
+        self.runs.insert(id.into(), run);
+        self.persist(id)?;
+        Ok(())
+    }
+
     pub fn is_detached(&self, id: &str) -> bool {
         self.console_available(id)
     }
     fn console_socket(&self, id: &str) -> PathBuf {
-        self.root.join(id).join("terminal.socket")
+        self.root
+            .join(id)
+            .canonicalize()
+            .unwrap_or_else(|_| self.root.join(id))
+            .join("terminal.socket")
     }
     fn attach_command(&self, id: &str) -> Command {
         let mut command = Command::new("tmux");
@@ -99,7 +153,9 @@ impl Manager {
         command
     }
     pub(super) fn console_available(&self, id: &str) -> bool {
-        valid_id(id) && self.console_socket(id).exists()
+        valid_id(id)
+            && self.console_socket(id).exists()
+            && matches!(console_status(&self.console_socket(id)), Ok(None))
     }
     pub(super) fn poll_consoles(&mut self) -> Result<()> {
         let finished = self
@@ -143,49 +199,25 @@ impl Manager {
         );
         let terminal = TerminalOwner::open()?;
         let mut run = self.read_record(id)?;
-        let shared = self.console_available(id) && !self.consoles.contains_key(id);
-        if !self.console_available(id) {
-            ensure!(
-                !run.state.active() && run.state != State::Unattached,
-                "This run is owned by another window"
-            );
-            let leases = vec![
-                lease(&self.root, &format!("checkout:{}", run.directory.display()))?,
-                lease(
-                    &self.root,
-                    &format!("task:{}:{}", run.repository, run.task_id),
-                )?,
-            ];
-            run = self.read_record(id)?;
-            ensure!(
-                !run.state.active() && run.state != State::Unattached,
-                "This run is still active elsewhere"
-            );
-            ensure!(
-                run.publication != "publishing",
-                "Wait for result publication to finish"
-            );
-            ensure!(run.directory.is_dir(), "This checkout no longer exists");
-            let native =
-                backend::interactive_command(&run, &self.executables[run.provider.index()])?;
-            let config = self.root.join(id).join("tmux.conf");
-            write_console_config(&config, b"set -g status off\nset -g prefix None\nset -g history-limit 2000\nset -g remain-on-exit on\nset -g destroy-unattached off\nbind-key -n C-z detach-client\n")?;
-            let console = Console {
-                socket: self.console_socket(id),
-                _leases: leases,
-            };
+        let shared =
+            self.detached || (self.console_available(id) && !self.consoles.contains_key(id));
+        worker::reconcile(&self.root, &mut run)?;
+        if self.detached
+            && run.state != State::Unattached
+            && self.console_available(id)
+            && !worker::live(&self.root, id)?
+        {
             let (width, height) = crossterm::terminal::size()?;
-            let output = console.command().arg("-f").arg(config)
-                .args(["new-session", "-d", "-s", "agent", "-c"]).arg(&run.directory)
-                .arg("-x").arg(width.to_string()).arg("-y").arg(height.to_string())
-                .arg("--").arg(native.get_program()).args(native.get_args()).output()
-                .context("Open native terminal (tmux is required; use the packaged Shepherd or nix develop)")?;
-            ensure!(
-                output.status.success(),
-                "Open native terminal: {}",
-                clean(&String::from_utf8_lossy(&output.stderr))
-            );
-            self.consoles.insert(id.into(), console);
+            worker::launch(self, id, None, width, height)?;
+        }
+        if !self.console_available(id) {
+            if self.detached {
+                let (width, height) = crossterm::terminal::size()?;
+                worker::launch(self, id, None, width, height)?;
+            } else {
+                let (width, height) = crossterm::terminal::size()?;
+                self.start_console(id, width, height)?;
+            }
         }
         if !shared {
             run.state = State::Running;
@@ -271,6 +303,7 @@ mod tests {
     fn windows_discover_and_stop_the_same_terminal() -> Result<()> {
         let temporary = tempfile::tempdir()?;
         let mut owner = Manager::open(temporary.path())?;
+        owner.detached = false;
         let run = Run::fixture(Provider::Codex);
         fs::create_dir_all(owner.root.join(&run.id))?;
         owner.runs.insert(run.id.clone(), run.clone());
@@ -300,8 +333,9 @@ mod tests {
         );
         owner.consoles.insert(run.id.clone(), console);
         let mut viewer = Manager::open(temporary.path())?;
+        viewer.detached = false;
         assert!(viewer.is_detached(&run.id));
-        assert_eq!(viewer.get(&run.id)?.state, State::Running);
+        assert!(viewer.get(&run.id)?.state.active());
         let first_tty = nix::pty::openpty(None, None)?;
         let second_tty = nix::pty::openpty(None, None)?;
         let attach = |manager: &Manager, slave: std::os::fd::OwnedFd| -> Result<NativeProcess> {
@@ -356,6 +390,7 @@ mod tests {
         drop(viewer);
         assert!(owner.consoles[&run.id].status()?.is_none());
         viewer = Manager::open(temporary.path())?;
+        viewer.detached = false;
         viewer.stop(&run.id)?;
         owner.poll()?;
         viewer.refresh_external()?;
