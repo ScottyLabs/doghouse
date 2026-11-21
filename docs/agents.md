@@ -8,7 +8,7 @@ For shared tasks, the checkout must have a Git remote matching the repository. L
 
 Before starting, Shepherd loads applicable `AGENTS.md` files from the original directory and its parents, in precedence order, and includes them in the run context. The run records which files were loaded. Implementation instructions require reading project documentation, outlining the approach and checks before editing, implementing, running relevant checks, and reporting the result. Agents must honor deeper instructions where they edit.
 
-- **Plan** uses Codex read-only mode or Claude Code plan mode with read tools. It inspects the selected checkout, including local changes.
+- **Plan** uses Codex read-only mode or Claude Code plan mode with read tools. It inspects the selected checkout, including local changes. Authenticated forge reads remain available through the `shepherd_collar` MCP tools.
 - **Implement** creates a detached Git worktree from committed HEAD. Your original checkout remains available. New files appear in worktree status; the diff includes tracked changes from the base commit.
 
 Shepherd invokes the installed native CLI with its existing login and model configuration. It does not provision API keys or run a separate agent framework. Both CLI integrations use structured output; Codex uses native automatic approval review for implementation, and Claude Code uses `acceptEdits` with noninteractive permission handling. Denied tools appear as Needs attention. Authentication, version, and permission failures remain visible in activity. Claude Code must support `--permission-prompts none`.
@@ -82,6 +82,12 @@ A plan file is a JSON array with `title` and `body` fields. A human accepts or d
 
 GCD issue edits in the TUI are explicit writes through Collar. Writes are not automatically retried. If completion is uncertain, inspect the issue before another attempt. A local revision or claim grants no permission to push, merge, publish, or close remote issues.
 
-Forge reads and writes use Collar's Rust library with its host-bound authentication. `SHEPHERD_COLLAR` selects the CLI used for canonical Governance discovery; the Nix package pins it. No separate tokens or direct credential-store reads are required. Verification of remote writes uses loopback HTTP fixtures and temporary files; never test them against live repositories.
+Forge reads and writes use Collar's Rust library with its host-bound authentication. `SHEPHERD_COLLAR` selects the CLI used for canonical Governance discovery and agent read tools; the Nix package pins it. No separate tokens or direct credential-store reads are required. Verification of remote writes uses loopback HTTP fixtures and temporary files; never test them against live repositories.
 
 `d` in the session list confirms stopping the session and removing its turns. In history view it removes only the selected turn. Requests are stored in the shared registry and completed once its worker has stopped; project files and saved native conversations are retained. Any window can request stop or deletion. A checkout lock prevents simultaneous agent writers, but does not prevent deleting an older finished turn.
+
+## Authenticated agent reads
+
+Fresh agent turns, automated follow-ups, and newly opened native conversations load a session-scoped `shepherd_collar` MCP server using the packaged Collar executable. It targets `git.cmu.dev`, defaults to the selected repository, and exposes Collar's default read-only tool catalog. Agents use these tools for PR details, diffs, CI, issues, documentation, and API GET instead of attempting authenticated shell commands inside a read-only sandbox.
+
+The provider host launches the server with its normal credential-store access. Codex explicitly forwards session-bus and XDG environment names, plus Collar's host-bound environment/configuration names; secret values are never embedded in command arguments, files, or session records. Claude inherits its host environment and permits only this server's MCP namespace without prompting. No `--allow-writes` flag is supplied, and shell/file permissions are unchanged. Existing native processes must be stopped and reopened to load the added server. A genuinely locked keyring still requires unlocking through the normal Collar login flow.
