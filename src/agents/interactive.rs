@@ -117,7 +117,7 @@ impl Manager {
                 .args(["new-session", "-d", "-s", "agent", "-c"]).arg(&run.directory)
                 .arg("-x").arg(width.to_string()).arg("-y").arg(height.to_string())
                 .arg("--").arg(native.get_program()).args(native.get_args()).output()
-                .context("Open native terminal (tmux is required; use the packaged Shepherd or nix develop)")?;
+                .context("Open native terminal (tmux is required; use the packaged Doghouse or nix develop)")?;
             ensure!(
                 output.status.success(),
                 "Open native terminal: {}",
@@ -127,7 +127,7 @@ impl Manager {
         self.consoles.insert(id.into(), console);
         run.state = State::Detached;
         run.native_continued = true;
-        run.event("Conversation", "Native conversation available. Press o to open it; Ctrl+Z returns; quitting Shepherd keeps it open.");
+        run.event("Conversation", "Native conversation available. Press o to open it; Ctrl+Z returns; quitting Doghouse keeps it open.");
         self.runs.insert(id.into(), run);
         self.persist(id)?;
         Ok(())
@@ -303,7 +303,7 @@ impl Manager {
 
 fn console_configuration(provider: Provider) -> String {
     format!(
-        "set -g status on\nset -g status-style 'fg=default,bg=default'\nset -g status-format[0] ' Shepherd | Ctrl+Z: return | {}: subagents '\nset -g prefix None\nset -g history-limit 2000\nset -g remain-on-exit on\nset -g destroy-unattached off\nbind-key -n C-z detach-client\n",
+        "set -g status on\nset -g status-style 'fg=default,bg=default'\nset -g status-format[0] ' Doghouse | Ctrl+Z: return | {}: subagents '\nset -g prefix None\nset -g history-limit 2000\nset -g remain-on-exit on\nset -g destroy-unattached off\nbind-key -n C-z detach-client\n",
         provider.subagent_menu()
     )
 }

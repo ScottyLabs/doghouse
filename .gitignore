@@ -1,4 +1,5 @@
 /target/
+/.doghouse/
 /.shepherd/
 /.direnv/
 /.pre-commit-config.yaml

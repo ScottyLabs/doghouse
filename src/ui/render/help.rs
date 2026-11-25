@@ -112,7 +112,7 @@ fn contents(ui: &Ui) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
                 ("Enter / o", "Open conversation"),
                 ("Space", "Choose an action"),
                 ("Right / l", "Inspect subagents"),
-                ("Ctrl+Z", "Return to Shepherd"),
+                ("Ctrl+Z", "Return to Doghouse"),
                 ("r", "Automated follow-up"),
                 ("Tab", "Activity / result"),
                 ("Ctrl+R / s / F5", "Refresh sessions"),

@@ -167,10 +167,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "explicit local benchmark; requires SHEPHERD_BENCH_COLLAR"]
+    #[ignore = "explicit local benchmark; requires DOGHOUSE_BENCH_COLLAR"]
     fn benchmark_reused_client_against_collar_subprocesses() {
         const REQUESTS: usize = 25;
-        let executable = std::env::var_os("SHEPHERD_BENCH_COLLAR")
+        let executable = std::env::var_os("DOGHOUSE_BENCH_COLLAR")
             .expect("select the baseline Collar executable");
         let directory = tempfile::tempdir().unwrap();
         let server = Server::http("127.0.0.1:0").unwrap();

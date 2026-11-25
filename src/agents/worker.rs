@@ -237,14 +237,18 @@ pub(crate) fn run(
 }
 
 pub(crate) fn registry_directory() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("SHEPHERD_AGENT_DIR") {
+    if let Some(path) = std::env::var_os("DOGHOUSE_AGENT_DIR") {
         return Ok(PathBuf::from(path));
     }
-    Ok(std::env::var_os("XDG_STATE_HOME")
+    let base = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
-        .context("Set HOME or SHEPHERD_AGENT_DIR for the shared agent registry")?
-        .join("shepherd"))
+        .context("Set HOME or DOGHOUSE_AGENT_DIR for the shared agent registry")?;
+    let legacy = base.join("shepherd");
+    if legacy.join("agents").is_dir() {
+        return Ok(legacy);
+    }
+    Ok(base.join("doghouse"))
 }
 
 impl Manager {
@@ -252,17 +256,20 @@ impl Manager {
         let registry = registry_directory()?;
         fs::create_dir_all(registry.join("agents"))?;
         fs::set_permissions(registry.join("agents"), fs::Permissions::from_mode(0o700))?;
-        let default_legacy = if std::env::var_os("SHEPHERD_AGENT_DIR").is_some() {
+        let default_legacy = if std::env::var_os("DOGHOUSE_AGENT_DIR").is_some() {
             None
         } else {
             std::env::var_os("XDG_CACHE_HOME")
                 .map(PathBuf::from)
                 .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
-                .map(|path| path.join("shepherd"))
         };
-        for legacy in [Some(board.to_path_buf()), default_legacy]
-            .into_iter()
-            .flatten()
+        for legacy in [
+            Some(board.to_path_buf()),
+            default_legacy.as_ref().map(|path| path.join("doghouse")),
+            default_legacy.map(|path| path.join("shepherd")),
+        ]
+        .into_iter()
+        .flatten()
         {
             let source = legacy.join("agents");
             if !source.is_dir()

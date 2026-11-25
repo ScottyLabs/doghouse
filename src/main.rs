@@ -31,7 +31,7 @@ const NAMES: [&str; 5] = ["Backlog", "Ready", "In progress", "Review", "Done"];
 #[derive(Parser)]
 #[command(version, about = "ScottyLabs project boards and agent handoffs")]
 struct Cli {
-    #[arg(long, env = "SHEPHERD_DATA_DIR")]
+    #[arg(long, env = "DOGHOUSE_DATA_DIR")]
     data_dir: Option<PathBuf>,
     /// Use cached data without refreshing Governance or GCD.
     #[arg(long)]
@@ -149,7 +149,7 @@ enum LocalAction {
     Task { project: String, title: String },
 }
 fn collar_command() -> Command {
-    Command::new(std::env::var_os("SHEPHERD_COLLAR").unwrap_or_else(|| "collar".into()))
+    Command::new(std::env::var_os("DOGHOUSE_COLLAR").unwrap_or_else(|| "collar".into()))
 }
 fn string<'a>(v: &'a Value, key: &str) -> &'a str {
     v[key].as_str().unwrap_or("")
@@ -666,12 +666,26 @@ fn cache_directory() -> Result<PathBuf> {
     let base = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".cache")))
-        .context("Set SHEPHERD_DATA_DIR or HOME")?;
-    let directory = base.join("shepherd");
-    let legacy = PathBuf::from(".shepherd/board.json");
-    if !directory.join("board.json").exists() && legacy.is_file() {
+        .context("Set DOGHOUSE_DATA_DIR or HOME")?;
+    let directory = base.join("doghouse");
+    let board = directory.join("board.json");
+    if !board.exists()
+        && let Some(legacy) = [
+            base.join("shepherd/board.json"),
+            PathBuf::from(".shepherd/board.json"),
+        ]
+        .into_iter()
+        .find(|path| path.is_file())
+    {
         fs::create_dir_all(&directory)?;
-        fs::copy(legacy, directory.join("board.json"))?;
+        let mut temporary = tempfile::NamedTempFile::new_in(&directory)?;
+        io::copy(&mut File::open(legacy)?, &mut temporary)?;
+        temporary.as_file().sync_all()?;
+        match temporary.persist_noclobber(board) {
+            Ok(_) => {}
+            Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     Ok(directory)
 }

@@ -1094,6 +1094,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "doghouse"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "collar",
+ "crossterm",
+ "fs2",
+ "nix 0.32.0",
+ "pulldown-cmark",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "signal-hook 0.4.6",
+ "tempfile",
+ "tiny_http",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3793,25 +3812,6 @@ name = "shell-words"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
-
-[[package]]
-name = "shepherd"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "collar",
- "crossterm",
- "fs2",
- "nix 0.32.0",
- "pulldown-cmark",
- "ratatui",
- "serde",
- "serde_json",
- "signal-hook 0.4.6",
- "tempfile",
- "tiny_http",
-]
 
 [[package]]
 name = "shlex"

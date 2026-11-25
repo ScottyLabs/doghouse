@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const BINARY: &str = env!("CARGO_BIN_EXE_shepherd");
+const BINARY: &str = env!("CARGO_BIN_EXE_doghouse");
 
 struct Fixture {
     temporary: tempfile::TempDir,
@@ -22,7 +22,7 @@ impl Fixture {
     fn new() -> Self {
         // Unix socket paths are limited; nested Nix TMPDIRs can exceed that limit.
         let temporary = tempfile::Builder::new()
-            .prefix("shepherd-")
+            .prefix("doghouse-")
             .tempdir_in("/tmp")
             .unwrap();
         let board = temporary.path().join("board");
@@ -36,7 +36,7 @@ exec)
     cat >/dev/null
     printf '%s\n' '{"type":"thread.started","thread_id":"fixture-session"}'
     printf '%s\n' '{"type":"item.completed","item":{"type":"collab_tool_call","tool":"spawn_agent","sender_thread_id":"fixture-session","receiver_thread_ids":["child-fixture"],"prompt":"Review child fixtures","agents_states":{"child-fixture":{"status":"running","message":"Checking fixtures"}}}}'
-    while [ ! -f "$SHEPHERD_TEST_FINISH" ]; do sleep 0.05; done
+    while [ ! -f "$DOGHOUSE_TEST_FINISH" ]; do sleep 0.05; done
     printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"Fixture finished"}}' '{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":3}}'
     ;;
 resume)
@@ -83,9 +83,9 @@ esac
             .arg("--data-dir")
             .arg(&self.board)
             .env("XDG_CACHE_HOME", self.temporary.path().join("legacy-cache"))
-            .env("SHEPHERD_AGENT_DIR", &self.registry)
-            .env("SHEPHERD_CODEX", &self.executable)
-            .env("SHEPHERD_TEST_FINISH", self.temporary.path().join("finish"));
+            .env("DOGHOUSE_AGENT_DIR", &self.registry)
+            .env("DOGHOUSE_CODEX", &self.executable)
+            .env("DOGHOUSE_TEST_FINISH", self.temporary.path().join("finish"));
         command
     }
     fn client(&self, board: Option<&Path>) -> Client {
@@ -97,9 +97,9 @@ esac
                 .arg(board)
                 .arg("--offline")
                 .env("XDG_CACHE_HOME", self.temporary.path().join("legacy-cache"))
-                .env("SHEPHERD_AGENT_DIR", &self.registry)
-                .env("SHEPHERD_CODEX", &self.executable)
-                .env("SHEPHERD_TEST_FINISH", self.temporary.path().join("finish"));
+                .env("DOGHOUSE_AGENT_DIR", &self.registry)
+                .env("DOGHOUSE_CODEX", &self.executable)
+                .env("DOGHOUSE_TEST_FINISH", self.temporary.path().join("finish"));
         } else {
             command.args(["--workspace", "@local", "--project", &self.project]);
         }

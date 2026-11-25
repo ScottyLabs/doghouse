@@ -425,12 +425,12 @@ pub(super) fn overlays(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
         (
             &ui.stop_run,
             "Stop session and all subagents?",
-            "This stops the entire session, including its current work and child tools. Conversation history and checkout changes are retained. Quitting Shepherd instead keeps the session running.",
+            "This stops the entire session, including its current work and child tools. Conversation history and checkout changes are retained. Quitting Doghouse instead keeps the session running.",
         ),
         (
             &ui.recover_run,
             "Recover interrupted conversation?",
-            "Its worker is no longer running. Open the saved native conversation in the existing checkout. No automated turn is restarted by Shepherd; unsaved terminal input may be unavailable.",
+            "Its worker is no longer running. Open the saved native conversation in the existing checkout. No automated turn is restarted by Doghouse; unsaved terminal input may be unavailable.",
         ),
     ] {
         if let Some(id) = id {

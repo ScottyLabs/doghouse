@@ -1,5 +1,5 @@
 {
-  description = "Shepherd: ScottyLabs project boards";
+  description = "Doghouse: ScottyLabs project boards";
   nixConfig = {
     extra-substituters = [ "https://scottylabs.cachix.org" ];
     extra-trusted-public-keys = [
@@ -40,14 +40,14 @@
         in
         {
           scottylabs = {
-            project.name = "shepherd";
+            project.name = "doghouse";
             rust.enable = true;
             shell.packages = [
               collar
               pkgs.tmux
             ];
-            shell.scripts.shepherd = ''
-              export SHEPHERD_COLLAR="${collar}/bin/collar"
+            shell.scripts.doghouse = ''
+              export DOGHOUSE_COLLAR="${collar}/bin/collar"
               cd "$SCOTTYLABS_ROOT"
               exec cargo run -- "$@"
             '';
@@ -56,7 +56,7 @@
             src = ./.;
             nativeBuildInputs = [ pkgs.makeWrapper ];
             buildArgs.postInstall = ''
-              wrapProgram $out/bin/shepherd --set-default SHEPHERD_COLLAR ${collar}/bin/collar --prefix PATH : ${
+              wrapProgram $out/bin/doghouse --set-default DOGHOUSE_COLLAR ${collar}/bin/collar --prefix PATH : ${
                 pkgs.lib.makeBinPath [ pkgs.tmux ]
               }
             '';

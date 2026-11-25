@@ -1,4 +1,4 @@
-# Shepherd
+# Doghouse
 
 Rust only. Use Ratatui and Crossterm for the terminal interface and Collar for authenticated forge reads. Preserve `.shepherd/board.json` compatibility. Do not introduce a web frontend or JavaScript runtime.
 

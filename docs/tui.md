@@ -1,6 +1,6 @@
 # Terminal workflow
 
-Shepherd uses the same Governance hierarchy wherever it runs:
+Doghouse uses the same Governance hierarchy wherever it runs:
 
 - Workspace: a Governance team, such as DevOps or CMU Housing.
 - Project: a project declared under that team; it can own several repositories.
@@ -42,7 +42,7 @@ Editors support Left, Right, Home, End, Delete, and Backspace. Enter saves title
 
 Startup and workspace or project changes show Issues + PRs together. Press `f` to choose a narrower view from a menu; Esc cancels without changing it.
 
-Stages follow repository labels such as `stage/ready`, `stage/in-progress`, and `stage/in progress`. Closed/merged resources are Done. Without a stage label, assigned issues appear active and issues with a directly closing open PR appear in review. Repositories without the requested shared workflow label show an actionable error instead of saving a misleading local override. Priority honors existing `priority/*` and `urgency/*` labels. Shepherd does not provision labels or change Governance settings.
+Stages follow repository labels such as `stage/ready`, `stage/in-progress`, and `stage/in progress`. Closed/merged resources are Done. Without a stage label, assigned issues appear active and issues with a directly closing open PR appear in review. Repositories without the requested shared workflow label show an actionable error instead of saving a misleading local override. Priority honors existing `priority/*` and `urgency/*` labels. Doghouse does not provision labels or change Governance settings.
 
 Agent runs support planning, isolated implementation, live activity, stop, native-session resume, diff review, and explicitly published issue comments. See the [agent workflow](agents.md). Local run history is labeled separately from shared GCD results.
 
@@ -52,7 +52,7 @@ The user-level cache contains private repository content; keep it private. It is
 
 `N` creates a local draft, shown only in the explicit draft view. Legacy local stage/owner/priority overlays are retained as `localPlan` notes when a shared issue refreshes, while its displayed fields come from GCD. Local agent claims and proposal notes are not cross-machine coordination. Accepting a cached proposal creates unsent drafts; it does not publish multiple issues implicitly.
 
-The GCD API does not provide an atomic compare-and-swap for these edits. Shepherd checks the inspected fields before writing and rechecks immediately before label replacement, but another client can still race that final request.
+The GCD API does not provide an atomic compare-and-swap for these edits. Doghouse checks the inspected fields before writing and rechecks immediately before label replacement, but another client can still race that final request.
 
 ## Local directory projects
 
@@ -63,11 +63,11 @@ Press `+` to add an existing directory. Relative paths and `~/` are accepted. It
 `X` forgets the selected local project after you type `remove`. It keeps files, tasks, and agent history; adding the same canonical directory restores its tasks. Local registrations are machine-specific and survive Governance refreshes. Shared project definitions remain in Governance.
 
 ```sh
-shepherd local add ~/dev/shepherd --name Shepherd
-shepherd local list
-shepherd local task LOCAL_PROJECT_ID 'Review the Terrier trial'
-shepherd --workspace @local --project LOCAL_PROJECT_ID
-shepherd local remove LOCAL_PROJECT_ID
+doghouse local add ~/dev/doghouse --name Doghouse
+doghouse local list
+doghouse local task LOCAL_PROJECT_ID 'Review the Terrier trial'
+doghouse --workspace @local --project LOCAL_PROJECT_ID
+doghouse local remove LOCAL_PROJECT_ID
 ```
 
 ## Personal work and accessible projects
@@ -76,26 +76,26 @@ The header exposes **All accessible** and **My work**. Press `u` to switch. All 
 
 My work is a single inbox across projects and stages. It includes open issues assigned to the signed-in account, assigned PRs, authored PRs, and requested reviews. Each item shows why it is in the inbox; items in multiple categories appear once. The account is read through Collar, never inferred from the machine username. `s` refreshes this inbox; `f` filters its source types. Offline mode uses the cached identity and assignments and labels the data as cached.
 
-`shepherd inbox` refreshes the same account data without opening the TUI. API reads paginate to completion; failures preserve the previous account snapshot and remain visible. Expanded task detail reads discussion comments through Collar. Ordinary refreshes preserve cached comments.
+`doghouse inbox` refreshes the same account data without opening the TUI. API reads paginate to completion; failures preserve the previous account snapshot and remain visible. Expanded task detail reads discussion comments through Collar. Ordinary refreshes preserve cached comments.
 
 The keyboard guide groups navigation, task, Collar, agent, and local actions. It uses two columns in wide terminals and one in narrow terminals; arrows and Page Up/Down scroll, and Esc closes it.
 
 ## Conversation and preview controls
 
-In Sessions, Enter opens the native conversation; Space opens its action menu. `o` also opens the conversation; Ctrl+Z returns to Shepherd and the native terminal's bar always shows that shortcut. Right opens reported subagents; Enter inspects one, and `o` opens its parent's native controls. `s` or F5 refreshes, Tab switches activity/result, and `x` confirms stopping the whole session and its children. These actions are available through menus, so memorizing letter shortcuts is optional. Cleanup is in the action menu. `d` (or Delete) removes a session and its turns, with confirmation to stop it and its children first when active. In history view, `d` removes only the selected turn. The request is shared and survives closing Shepherd. Quitting Shepherd leaves sessions running; interrupted conversations offer confirmed recovery.
+In Sessions, Enter opens the native conversation; Space opens its action menu. `o` also opens the conversation; Ctrl+Z returns to Doghouse and the native terminal's bar always shows that shortcut. Right opens reported subagents; Enter inspects one, and `o` opens its parent's native controls. `s` or F5 refreshes, Tab switches activity/result, and `x` confirms stopping the whole session and its children. These actions are available through menus, so memorizing letter shortcuts is optional. Cleanup is in the action menu. `d` (or Delete) removes a session and its turns, with confirmation to stop it and its children first when active. In history view, `d` removes only the selected turn. The request is shared and survives closing Doghouse. Quitting Doghouse leaves sessions running; interrupted conversations offer confirmed recovery.
 
 Task descriptions, discussion comments, and automated results render CommonMark structure: headings, emphasis, inline/fenced code, nested lists, checkboxes, quotes, links, and tables. Hidden HTML comments stay hidden; editing still uses the original Markdown source. Tables fit the preview width, with long cells shortened visibly. Colors follow the terminal palette.
 
-Letter shortcuts ignore Ctrl/Alt modifiers unless explicitly documented; Ctrl+Z cannot accidentally invoke `z` close/reopen in Shepherd. `+` adds a directory project, freeing lowercase `c` for comments. Uppercase `C` remains a comment alias.
+Letter shortcuts ignore Ctrl/Alt modifiers unless explicitly documented; Ctrl+Z cannot accidentally invoke `z` close/reopen in Doghouse. `+` adds a directory project, freeing lowercase `c` for comments. Uppercase `C` remains a comment alias.
 
 Pickers use Up/Down or j/k to select, Home/End to jump, and `/` to enter filter text. In filter mode every letter, including j/k, is searchable; arrows and Ctrl+N/P still move the selection. Esc leaves filter mode, then closes the picker. Enter chooses the highlighted item. The footer shows these controls.
 
-Text editors and agent goals also support Ctrl+A/E (start/end), Ctrl+U/K (delete before/after the cursor), and Ctrl+W (delete the previous word). Home/End selects the first/last task or run, and Ctrl+D/U pages down/up; task editing shortcuts stay scoped to the task view. Every Shepherd window using the same user registry, including different board caches, can open a native conversation with `o`. Ctrl+Z detaches only that terminal client; other attached windows keep their conversation open.
+Text editors and agent goals also support Ctrl+A/E (start/end), Ctrl+U/K (delete before/after the cursor), and Ctrl+W (delete the previous word). Home/End selects the first/last task or run, and Ctrl+D/U pages down/up; task editing shortcuts stay scoped to the task view. Every Doghouse window using the same user registry, including different board caches, can open a native conversation with `o`. Ctrl+Z detaches only that terminal client; other attached windows keep their conversation open.
 
 Reads run with a shared limit of four Collar requests. Refreshes use at most three slots, reserving one for discussion reads and write preconditions. Repositories appear as their complete issue/PR snapshots finish; one failed repository leaves its cached tasks intact while others update. My work searches and detail reads use the same limit, and its tasks and account metadata save together. Manual refresh continues to read the forge rather than a time-based API cache.
 
 Board saves buffer JSON before fsync and atomic replacement. The UI checks the board file identity and timestamps between events, reloading it when another window replaces or edits it. The existing board format and explicit reload behavior are preserved.
 
-Forge connections and host-bound credentials are reused between requests. Manual refresh (`s`, `g`, or refreshing My work) reloads Collar credentials, so a separate `collar auth login` takes effect without restarting Shepherd. API responses retain Collar's always-on conditional cache revalidation; writes invalidate that cache. Canonical Governance discovery still uses the pinned Collar CLI to preserve its snapshot validation.
+Forge connections and host-bound credentials are reused between requests. Manual refresh (`s`, `g`, or refreshing My work) reloads Collar credentials, so a separate `collar auth login` takes effect without restarting Doghouse. API responses retain Collar's always-on conditional cache revalidation; writes invalidate that cache. Canonical Governance discovery still uses the pinned Collar CLI to preserve its snapshot validation.
 
-Agent sessions use a shared, private registry in `$XDG_STATE_HOME/shepherd/agents` (default `~/.local/state/shepherd/agents`). Background workers own execution and locks independently of terminal windows. Reopening Shepherd discovers them; after a reboot, it offers recovery from saved conversation history without automatically replaying work. See [agent workflows](agents.md) for lifecycle and recovery details.
+Agent sessions use a shared, private registry in `$XDG_STATE_HOME/doghouse/agents` (default `~/.local/state/doghouse/agents`). Background workers own execution and locks independently of terminal windows. Reopening Doghouse discovers them; after a reboot, it offers recovery from saved conversation history without automatically replaying work. See [agent workflows](agents.md) for lifecycle and recovery details.

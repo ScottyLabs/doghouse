@@ -373,7 +373,7 @@ fn update_with(client: &forge::Client, task: &Value, field: &str, value: &str) -
                 matching.is_some()
                     || (field == "stage" && value == "backlog")
                     || (field == "priority" && value == "normal"),
-                "This repository has no shared label for that value. Configure its workflow on GCD; Shepherd will not create labels."
+                "This repository has no shared label for that value. Configure its workflow on GCD; Doghouse will not create labels."
             );
             if field == "stage" && string(&current, "state") == "closed" {
                 let normalized = normalize(&current);

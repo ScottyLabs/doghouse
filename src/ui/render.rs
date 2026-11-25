@@ -269,7 +269,9 @@ fn detail_lines(task: &Value, store: &Store, width: u16) -> Vec<Line<'static>> {
                 BLUE,
             )));
             let body = string(report, "body");
-            let body = if body.starts_with("<!-- shepherd-run:") {
+            let body = if body.starts_with("<!-- doghouse-run:")
+                || body.starts_with("<!-- shepherd-run:")
+            {
                 body.split_once("-->")
                     .map(|(_, body)| body.trim())
                     .unwrap_or(body)
@@ -538,7 +540,7 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
     f.render_widget(Block::default().style(style(TEXT).bg(BG)), area);
     if area.width < 60 || area.height < 16 {
         f.render_widget(
-            Paragraph::new("Shepherd\nResize to 60 columns and 16 rows.\nq quit")
+            Paragraph::new("Doghouse\nResize to 60 columns and 16 rows.\nq quit")
                 .style(style(TEXT)),
             area,
         );
@@ -567,7 +569,7 @@ pub(super) fn draw(ui: &Ui, f: &mut ratatui::Frame, store: &Store) {
     f.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
-                Span::styled("SHEPHERD", style(BLUE).add_modifier(Modifier::BOLD)),
+                Span::styled("DOGHOUSE", style(BLUE).add_modifier(Modifier::BOLD)),
                 Span::raw("   "),
                 Span::styled(
                     "All accessible",

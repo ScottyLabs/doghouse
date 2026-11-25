@@ -735,7 +735,7 @@ fn run_ui(
             let _ = crossterm::execute!(io::stdout(), event::DisableBracketedPaste);
             ratatui::restore();
             println!(
-                "Opening the native conversation. Ctrl+Z returns to Shepherd while work continues."
+                "Opening the native conversation. Ctrl+Z returns to Doghouse while work continues."
             );
             let result = manager.interact(&id, &interrupted);
             FileExt::lock_exclusive(&store._lock)?;

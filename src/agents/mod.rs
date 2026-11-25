@@ -49,8 +49,8 @@ impl Provider {
     }
     fn executable(self) -> OsString {
         std::env::var_os(match self {
-            Self::Codex => "SHEPHERD_CODEX",
-            Self::Claude => "SHEPHERD_CLAUDE",
+            Self::Codex => "DOGHOUSE_CODEX",
+            Self::Claude => "DOGHOUSE_CLAUDE",
         })
         .unwrap_or_else(|| match self {
             Self::Codex => "codex".into(),
@@ -1172,7 +1172,7 @@ impl Manager {
         let active = self
             .active
             .get_mut(id)
-            .context("This run is not attached to this Shepherd window")?;
+            .context("This run is not attached to this Doghouse window")?;
         signal(active, Signal::SIGTERM)?;
         active.stopping = Some(Instant::now());
         let run = self.runs.get_mut(id).context("Run disappeared")?;
@@ -1239,7 +1239,7 @@ impl Manager {
             run.directory
                 .canonicalize()?
                 .starts_with(self.root.join(id).canonicalize()?),
-            "Checkout is not managed by Shepherd"
+            "Checkout is not managed by Doghouse"
         );
         git(
             &run.source_directory,
@@ -1312,13 +1312,13 @@ impl Manager {
             "This run was already submitted. Inspect GCD before another publication."
         );
         Ok(format!(
-            "<!-- shepherd-run:{} -->\n### {} / {}\n\n{}{}",
+            "<!-- doghouse-run:{} -->\n### {} / {}\n\n{}{}",
             run.id,
             run.provider.name(),
             run.mode.name(),
             run.result,
             if run.result_truncated {
-                "\n\nResult was truncated in Shepherd; inspect the local transcript for full output."
+                "\n\nResult was truncated in Doghouse; inspect the local transcript for full output."
             } else {
                 ""
             }
@@ -1635,7 +1635,7 @@ mod tests {
         assert!(
             manager
                 .publication_body(&id)?
-                .starts_with("<!-- shepherd-run:")
+                .starts_with("<!-- doghouse-run:")
         );
         manager.set_publication(&id, "publishing")?;
         assert!(manager.publication_body(&id).is_err());
