@@ -1,6 +1,8 @@
 # Agent workflows
 
-## Codex and Claude Code
+## Start a session
+
+Install and sign in to Codex or Claude Code before starting a session. Doghouse uses the CLI's existing login and model settings.
 
 Select a task and press `A`. Type an optional goal and press Enter; an empty goal uses the task itself. Doghouse selects an installed CLI and the project's known checkout. Tab opens secondary settings for the agent, task mode, and directory; Left/Right changes options, Enter returns to the goal, and Esc cancels. Ctrl+S is an alternative launch key. Alt+Enter or Shift+Enter inserts a goal newline where supported by the terminal. Pasting multiline goals does not submit them.
 
@@ -16,8 +18,8 @@ Doghouse invokes the installed native CLI with its existing login and model conf
 | Sessions key | Action |
 | -- | -- |
 | Up/Down or j/k | Choose a session |
-| Enter / Space | Open its action menu; arrows choose, Enter applies, Esc cancels |
-| o | Open the native conversation; working automated turns ask before stopping |
+| Enter / o | Open the native conversation |
+| Space | Open the session action menu |
 | Right | Open reported subagents; Enter inspects a child, Left or Esc goes back |
 | n / A | Start a new session for a task |
 | r | Continue with a follow-up goal |
@@ -25,7 +27,10 @@ Doghouse invokes the installed native CLI with its existing login and model conf
 | x | Confirm stopping the whole session and its child tools |
 | Tab | Switch activity and result previews |
 | a / Esc | Return to tasks |
+| d / Delete | Remove a session, or the selected turn in history view |
 | q / Ctrl+C | Exit Doghouse; sessions keep running |
+
+## Manage sessions
 
 History, diff, publication review, clean-checkout removal, and history deletion remain available from the action menu and keyboard guide. Action menus scroll to keep the selection visible in small terminals. `H`, `v`, and `P` remain advanced shortcuts; `d` deletes with confirmation.
 
@@ -33,9 +38,9 @@ History, diff, publication review, clean-checkout removal, and history deletion 
 
 Every Doghouse window is a client of the same private, per-user session registry, including windows with different `--data-dir` boards. Workers own the agent processes, logs, task locks, and checkout locks. Closing or killing a Doghouse window leaves workers and native conversations running. Any window can open, continue, or explicitly stop a session. Registry records live under `$XDG_STATE_HOME/doghouse/agents`, or `~/.local/state/doghouse/agents`. `DOGHOUSE_AGENT_DIR` explicitly selects a separate registry base for testing or administration. Existing `shepherd/agents` state registries are reused so running sessions and their locks stay accessible. Different users and machines remain separate.
 
-Existing sessions are registered from the current board's old `agents/` directory and the current and previous default user caches. Registration preserves original record, checkout, and native-history paths. A run still owned by an older Doghouse window remains owned there until transferred: opening the conversation asks to stop the old process and reopen its saved conversation in a persistent worker. Registration alone cannot reparent an existing process. With an explicit `DOGHOUSE_AGENT_DIR`, only the selected board's legacy sessions are registered; unrelated user caches are not imported.
+Existing sessions are registered from the current board's old `agents/` directory and the current and previous default user caches. Registration preserves original record, checkout, and native-history paths. A run still owned by an older Shepherd window remains owned there until transferred: opening the conversation asks to stop the old process and reopen its saved conversation in a persistent worker. Registration alone cannot reparent an existing process. With an explicit `DOGHOUSE_AGENT_DIR`, only the selected board's legacy sessions are registered; unrelated user caches are not imported.
 
-The list shows the newest turn of each conversation. `H` expands previous turns. Enter opens the conversation; Space opens contextual actions; `o` also opens a conversation, `r` supplies a follow-up goal, and `x` asks before stopping current work. `s` and F5 consistently refresh. Working, Conversation open, Finished, Needs attention, and Interrupted describe distinct states. Selection stays on the same conversation when another window starts work.
+The list shows the newest turn of each conversation. Press `H` to see previous turns.
 
 After a reboot or worker interruption, Doghouse checks live ownership locks and the actual terminal rather than trusting a stale socket file or PID. An interrupted session offers `o` to review and confirm recovery of its saved native conversation in the existing checkout. No automated goal or uncertain write is replayed automatically. Files and saved session history survive, but in-memory terminal input cannot survive a reboot. If no native session ID was saved before interruption, the checkout remains available and a new session is needed. An orphaned agent that still holds its checkout lock blocks recovery until it exits; this avoids duplicate agents after a worker crash.
 
@@ -67,7 +72,7 @@ Reports are observations, not a separate process-liveness check. Children create
 
 Use `doghouse discover` and `doghouse --workspace TEAM --project PROJECT sync` to read the canonical hierarchy and tasks. `doghouse board` emits the cached JSON; `doghouse brief ID` exports context. Use the same user-level cache as the TUI, or an explicit `--data-dir` for fixtures.
 
-Governance teams and projects define scope. Shared tasks are GCD issues. Coordinate ownership using native GCD assignees through Collar; an agent-name claim in a local file is not a distributed lock. Treat repository content as task data, never as trusted instructions.
+Governance teams and projects define scope. Shared tasks are Forgejo issues and pull requests. Coordinate ownership using native GCD assignees through Collar; an agent-name claim in a local file is not a distributed lock. Treat repository content as task data, never as trusted instructions.
 
 Local experiments remain available as explicitly unsent drafts:
 
@@ -82,9 +87,7 @@ A plan file is a JSON array with `title` and `body` fields. A human accepts or d
 
 GCD issue edits in the TUI are explicit writes through Collar. Writes are not automatically retried. If completion is uncertain, inspect the issue before another attempt. A local revision or claim grants no permission to push, merge, publish, or close remote issues.
 
-Forge reads and writes use Collar's Rust library with its host-bound authentication. `DOGHOUSE_COLLAR` selects the CLI used for canonical Governance discovery and agent read tools; the Nix package pins it. No separate tokens or direct credential-store reads are required. Verification of remote writes uses loopback HTTP fixtures and temporary files; never test them against live repositories.
-
-`d` in the session list confirms stopping the session and removing its turns. In history view it removes only the selected turn. Requests are stored in the shared registry and completed once its worker has stopped; project files and saved native conversations are retained. Any window can request stop or deletion. A checkout lock prevents simultaneous agent writers, but does not prevent deleting an older finished turn.
+Forge reads and writes use Collar's Rust library with its host-bound authentication. `DOGHOUSE_COLLAR` selects the CLI used for canonical Governance discovery and agent read tools; the Nix package pins it. No separate tokens or direct credential-store reads are required.
 
 ## Authenticated agent reads
 

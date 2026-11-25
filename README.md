@@ -1,28 +1,25 @@
 # Doghouse
 
-A Rust terminal project manager for ScottyLabs. Governance defines workspaces and projects; GCD issues hold shared tasks. Collar supplies discovery, authentication, and forge operations.
+Doghouse is the ScottyLabs terminal project manager. Browse Governance projects, manage Forgejo issues and pull requests, and start Codex or Claude Code sessions from a task.
+
+## Get started
+
+From a Doghouse checkout, sign in to Forgejo with Collar and open the board:
 
 ```sh
-nix run . -- --workspace devops
+nix develop --command collar auth login
+nix run .
 ```
 
-Press `+` to add a directory under Local projects; `n` then creates tasks stored on this machine. Use `u` for All accessible or My work, `w` for a workspace, `P` for a project, and `s` to refresh tasks. The task list has a live preview; `v` switches to kanban. `A` opens a goal-first agent dialog; Enter starts it. `Space` opens task actions; `e`/`d` edit issue or PR text, `p` picks priority, `c` comments, and `z` closes/reopens. `a` opens shared sessions; Enter opens a conversation; Space shows actions, Right shows subagents, `o` opens a conversation, and Ctrl+Z returns. Sessions continue when Doghouse closes; interrupted sessions can be recovered. Tab previews results, `v` shows changes, and `d` confirms session removal, stopping it first when needed. `?` shows actions. [Terminal workflow](docs/tui.md) covers editing and shared state.
+Use `w` to choose a workspace, `P` to choose a project, and `?` to see the available actions.
 
-The Nix package and development shell pin [Collar](https://git.cmu.dev/ScottyLabs/collar), including canonical team discovery and revalidated API response caching. No separate Collar upgrade is needed for `nix run`. For development, use `collar dev run -- doghouse --workspace devops`; Forge access uses Collar as a Rust library with shared connections and authenticated caching. `DOGHOUSE_COLLAR` selects the CLI used for canonical Governance discovery.
+## Documentation
 
-```sh
-nix run . -- discover
-nix run . -- --workspace cmu-housing --project housing sync
-nix run . -- --offline --workspace devops
-```
+- [Getting started](docs/getting-started.md)
+- [Terminal workflow](docs/tui.md)
+- [Agent workflows](docs/agents.md)
+- [Contributing](CONTRIBUTING.md)
 
-The cache defaults to `$XDG_CACHE_HOME/doghouse` or `~/.cache/doghouse`, independently of the current directory. `--data-dir` overrides it. When the new cache has no board, Doghouse imports the previous `shepherd` user cache or the checkout-local `.shepherd/board.json`, in that order. Local drafts and old planning notes are retained, clearly separated from shared issues.
+## License
 
-```sh
-collar dev run -- cargo test --locked
-collar dev run -- cargo clippy --all-targets -- -D warnings
-collar check --all
-nix build --no-link
-```
-
-The shared Kennel flake supplies the Rust environment, hooks, and packaging. Forgejo CI uses Kennel's reusable checks. See the [agent guide](docs/agents.md) for session workflows.
+[AGPL-3.0-or-later](LICENSE).

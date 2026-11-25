@@ -1,6 +1,10 @@
 # Terminal workflow
 
-Doghouse uses the same Governance hierarchy wherever it runs:
+See [Getting started](getting-started.md) for sign-in and board storage.
+
+## Browse projects
+
+Doghouse uses the Governance hierarchy:
 
 - Workspace: a Governance team, such as DevOps or CMU Housing.
 - Project: a project declared under that team; it can own several repositories.
@@ -8,7 +12,9 @@ Doghouse uses the same Governance hierarchy wherever it runs:
 
 Governance discovery refreshes on startup. Choose a workspace with `w` and a project with `P`. `r` selects a repository within the project; Tab cycles those repositories. Projects without repositories remain visible. `G` opens the canonical Governance declaration; workspace/project definitions are maintained there rather than duplicated locally.
 
-The list keeps task details beside the selection when the terminal is wide enough. Enter expands detail. Narrow terminals preserve readable task titles; `v` switches to kanban. High-priority issues sort first. Selection uses a uniform title-line band; metadata remains outside it. All colors come from the terminal's background, foreground, and ANSI palette. `NO_COLOR` is respected.
+## Work with tasks
+
+The list keeps task details beside the selection when the terminal is wide enough. Enter expands detail. Narrow terminals preserve readable task titles; `v` switches to kanban. High-priority issues sort first. Doghouse uses your terminal palette and respects `NO_COLOR`.
 
 | Key | Action |
 | -- | -- |
@@ -35,7 +41,7 @@ The list keeps task details beside the selection when the terminal is wide enoug
 | g / G | Refresh Governance / open its declaration |
 | N | Save an unsent local draft |
 | b | Export a task brief |
-| a / A | Agents view / launch Codex or Claude Code for the selected task |
+| a / A | Open sessions / start an agent for the selected task |
 | ? / q | Show actions / quit |
 
 Editors support Left, Right, Home, End, Delete, and Backspace. Enter saves titles and assignees. The priority picker supports arrows or j/k, Enter applies, and Esc cancels. Selecting normal removes priority labels when no medium label exists, preserving unrelated labels. In descriptions and comments, Enter inserts a newline; Ctrl+S saves or posts. Forge reads and writes use Collar's Rust library and authenticated client in process. Comments, title/description edits, assignees, priority labels, and close/reopen work on both issues and PRs. PR stages follow draft/merge state; `m` changes issue or local task stages. Closing a PR does not merge it; merged PRs cannot be reopened. The dialog identifies the remote write. Edits compare the inspected remote issue or PR with its current state before sending; stale edits fail. Writes are never retried automatically. If a response is uncertain, inspect the issue on GCD before trying again. Ordinary quit waits for a pending write; Ctrl+C force-exits and its remote write may already have completed.
@@ -78,24 +84,10 @@ My work is a single inbox across projects and stages. It includes open issues as
 
 `doghouse inbox` refreshes the same account data without opening the TUI. API reads paginate to completion; failures preserve the previous account snapshot and remain visible. Expanded task detail reads discussion comments through Collar. Ordinary refreshes preserve cached comments.
 
-The keyboard guide groups navigation, task, Collar, agent, and local actions. It uses two columns in wide terminals and one in narrow terminals; arrows and Page Up/Down scroll, and Esc closes it.
-
-## Conversation and preview controls
-
-In Sessions, Enter opens the native conversation; Space opens its action menu. `o` also opens the conversation; Ctrl+Z returns to Doghouse and the native terminal's bar always shows that shortcut. Right opens reported subagents; Enter inspects one, and `o` opens its parent's native controls. `s` or F5 refreshes, Tab switches activity/result, and `x` confirms stopping the whole session and its children. These actions are available through menus, so memorizing letter shortcuts is optional. Cleanup is in the action menu. `d` (or Delete) removes a session and its turns, with confirmation to stop it and its children first when active. In history view, `d` removes only the selected turn. The request is shared and survives closing Doghouse. Quitting Doghouse leaves sessions running; interrupted conversations offer confirmed recovery.
+## Previews and shortcuts
 
 Task descriptions, discussion comments, and automated results render CommonMark structure: headings, emphasis, inline/fenced code, nested lists, checkboxes, quotes, links, and tables. Hidden HTML comments stay hidden; editing still uses the original Markdown source. Tables fit the preview width, with long cells shortened visibly. Colors follow the terminal palette.
 
-Letter shortcuts ignore Ctrl/Alt modifiers unless explicitly documented; Ctrl+Z cannot accidentally invoke `z` close/reopen in Doghouse. `+` adds a directory project, freeing lowercase `c` for comments. Uppercase `C` remains a comment alias.
-
 Pickers use Up/Down or j/k to select, Home/End to jump, and `/` to enter filter text. In filter mode every letter, including j/k, is searchable; arrows and Ctrl+N/P still move the selection. Esc leaves filter mode, then closes the picker. Enter chooses the highlighted item. The footer shows these controls.
 
-Text editors and agent goals also support Ctrl+A/E (start/end), Ctrl+U/K (delete before/after the cursor), and Ctrl+W (delete the previous word). Home/End selects the first/last task or run, and Ctrl+D/U pages down/up; task editing shortcuts stay scoped to the task view. Every Doghouse window using the same user registry, including different board caches, can open a native conversation with `o`. Ctrl+Z detaches only that terminal client; other attached windows keep their conversation open.
-
-Reads run with a shared limit of four Collar requests. Refreshes use at most three slots, reserving one for discussion reads and write preconditions. Repositories appear as their complete issue/PR snapshots finish; one failed repository leaves its cached tasks intact while others update. My work searches and detail reads use the same limit, and its tasks and account metadata save together. Manual refresh continues to read the forge rather than a time-based API cache.
-
-Board saves buffer JSON before fsync and atomic replacement. The UI checks the board file identity and timestamps between events, reloading it when another window replaces or edits it. The existing board format and explicit reload behavior are preserved.
-
-Forge connections and host-bound credentials are reused between requests. Manual refresh (`s`, `g`, or refreshing My work) reloads Collar credentials, so a separate `collar auth login` takes effect without restarting Doghouse. API responses retain Collar's always-on conditional cache revalidation; writes invalidate that cache. Canonical Governance discovery still uses the pinned Collar CLI to preserve its snapshot validation.
-
-Agent sessions use a shared, private registry in `$XDG_STATE_HOME/doghouse/agents` (default `~/.local/state/doghouse/agents`). Background workers own execution and locks independently of terminal windows. Reopening Doghouse discovers them; after a reboot, it offers recovery from saved conversation history without automatically replaying work. See [agent workflows](agents.md) for lifecycle and recovery details.
+Text editors and agent goals also support Ctrl+A/E (start/end), Ctrl+U/K (delete before/after the cursor), and Ctrl+W (delete the previous word). Home/End selects the first/last task or run, and Ctrl+D/U pages down/up; task editing shortcuts stay scoped to the task view.
